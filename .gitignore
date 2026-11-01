@@ -1,0 +1,8 @@
+/debug/
+/target/
+**/bin/
+**/obj/
+*.user
+*.suo
+/private/
+/config.json

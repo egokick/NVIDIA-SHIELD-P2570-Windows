@@ -1,0 +1,50 @@
+name: Windows build and checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Prepare Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { throw 'Rust selection failed' }
+      - name: Build and test package
+        run: ./build.ps1
+      - name: Test tray state transitions
+        run: |
+          $p = Start-Process -FilePath ./debug/package/bin/tray/ShieldController.exe -ArgumentList '--selftest' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Tray checks failed' }
+      - name: Build installer
+        run: ./installer/build-installer.ps1
+      - name: Preserve release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-x64-installer
+          path: |
+            debug/release/*Setup*.exe
+            debug/release/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Preserve test evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: build-diagnostics
+          path: |
+            debug/**/*.log
+            debug/**/*.json
+          if-no-files-found: ignore

@@ -1,0 +1,18 @@
+[package]
+name = "shield-controller-datahost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+ozproto = { path = "../vendor/ozproto" }
+pcap = "2.5.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tracing = { version = "0.1", features = ["max_level_off", "release_max_level_off"] }
+vigem-client = "0.1.4"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_NetworkManagement_WiFi", "Win32_Networking_WinSock", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_Threading"] }
