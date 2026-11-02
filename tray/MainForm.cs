@@ -178,7 +178,7 @@ internal sealed class MainForm : Form
     private void ApplyState()
     {
         bool locked = busy || owner.CommandPending || exiting;
-        badge.Text = model.State == ControllerState.Connected ? "●  CONNECTED WIRELESSLY" : model.Paired ? "●  PAIRED" : "○  FIRST SETUP";
+        badge.Text = model.State == ControllerState.Connected ? "●  CONNECTED WIRELESSLY" : model.Paired ? (Running && !model.TransportReady ? "●  CONNECTING" : "○  DISCONNECTED · PAIRING SAVED") : "○  FIRST SETUP";
         badge.ForeColor = model.State == ControllerState.Connected ? Color.FromArgb(49, 111, 29) : Palette.Muted;
         if (tray is not null) tray.Text = "SHIELD · " + StatusModel.Title(model.State);
         bool multiple = candidates.Items.Count > 1 && !model.Paired && !locked;
@@ -197,7 +197,7 @@ internal sealed class MainForm : Form
         else if (restartRequired)
             Present("Nearly there.", "The driver is installed.\nRestart your PC to finish setup.", "Close", NextAction.Hide, IllustrationMode.Error, "Your progress is saved.");
         else if (model.State == ControllerState.Error)
-            Present("Let's try again.", model.Message, "Try again", NextAction.Retry, IllustrationMode.Error, "Need a hand? Open Help below.");
+            Present(model.Paired ? "Disconnected" : "Setup needs attention", model.Paired ? "Your pairing is saved.\nConnect to use your controller again." : model.Message, model.Paired ? "Connect" : "Check setup", NextAction.Retry, IllustrationMode.Error, model.Paired ? "Pairing saved · controller input is not active" : "Open Help below if you need a hand.");
         else if (capabilities?.Requirements.FirstOrDefault(r => !r.Available) is Requirement missing)
         {
             string title = "One quick setup.";
@@ -223,11 +223,11 @@ internal sealed class MainForm : Form
             Present(searchEmpty ? "Not found yet." : "Let's connect.", searchEmpty ? "Keep the green logo flashing.\nThen try again." : "Unplug the USB cable from your PC.\nTouch the green logo until it flashes.",
                 searchEmpty ? "Try again" : "It's flashing", NextAction.Pair, IllustrationMode.Pair, "Touch the logo gently. It doesn't click.");
         else if (model.State == ControllerState.Connected)
-            Present("Ready to play.", "Open your game.\nYour controller is connected wirelessly.", "Done", NextAction.Hide, IllustrationMode.Connected, "Closing this window keeps your controller connected.");
+            Present("Connected", "Open your game.\nYour controller is connected wirelessly.", "Hide to tray", NextAction.Hide, IllustrationMode.Connected, "Closing this window keeps your controller connected.");
         else if (Running)
-            Present(model.TransportReady ? "Wake up & play." : "Connecting…", model.TransportReady ? "Tap the green logo once.\nThen move a stick." : "Getting your wireless connection ready.", "Hide to tray", NextAction.Hide, IllustrationMode.Wake, "Already paired. No need to pair again.");
+            Present(model.TransportReady ? "Not connected yet" : "Connecting…", model.TransportReady ? "Tap the green logo once.\nThen move a stick." : "Getting your wireless connection ready.", "Hide to tray", NextAction.Hide, IllustrationMode.Wake, "Pairing saved · waiting for controller input");
         else
-            Present("Ready when you are.", "Your controller is already paired.\nConnect, then tap the green logo once.", "Connect", NextAction.Connect, IllustrationMode.Wake, "Your pairing is saved on this PC.");
+            Present("Disconnected", "Your pairing is saved.\nConnect, then tap the green logo once.", "Connect", NextAction.Connect, IllustrationMode.Wake, "Your pairing is saved on this PC.");
         primary.Enabled = !locked && nextAction != NextAction.None && (!multiple || candidates.SelectedItem is Candidate);
         if (nextAction is NextAction.InstallNpcap or NextAction.InstallVigem or NextAction.Pair or NextAction.Recover) primary.Enabled &= !Running;
         trayConnect.Text = disconnect.Text = Running ? "Disconnect" : "Connect";

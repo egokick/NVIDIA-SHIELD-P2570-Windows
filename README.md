@@ -13,7 +13,7 @@ This is an independent community project, not an NVIDIA product. The P2570 uses 
 1. Run **NVIDIA-SHIELD-P2570-Windows-Setup-0.1.0.exe** and click **Install**.
 2. Unplug the controller's USB cable from the PC. Touch and hold the green NVIDIA logo for **three seconds**, until it flashes. The picture in the app shows where to touch; the logo does not click. A wall USB charger is fine.
 3. Click **It's flashing**. The app finds, pairs, and connects your controller automatically. If it finds more than one controller, choose yours.
-4. When asked, tap the NVIDIA logo once and move a stick. **Ready to play** means your controller is sending wireless input. Open your game and choose its Xbox/controller input.
+4. When asked, tap the NVIDIA logo once and move a stick. **Connected** means your controller is sending wireless input. Open your game and choose its Xbox/controller input.
 
 If your PC needs a driver, the app shows one setup button at a time. Click it and follow the official installer's prompts. Network adapters are selected automatically when there is one clear choice; the app asks you to choose in **Settings** when needed.
 
@@ -32,7 +32,7 @@ The app installer needs no .NET or developer tools. Driver installation may requ
 
 The working wireless path has been tested with **P2570 firmware Ozmo 81, Realtek RTL8852CE motherboard Wi-Fi, and Windows 11 build 26300**. Actual stick movement and button presses reached Windows XInput. This does **not** establish compatibility with every adapter, Windows build, or controller firmware. Unsupported capabilities produce an error instead of changing driver settings.
 
-This first release supports one controller and the standard gamepad sticks, buttons, D-pad and triggers. Audio, microphone, touchpad mouse input and vibration are not implemented. ViGEmBus is an archived upstream project; its final signed release is used here.
+This first release supports one controller and the standard gamepad sticks, buttons, D-pad and triggers. The touchpad moves the PC mouse; pressing it clicks. Audio, microphone and vibration are not implemented. ViGEmBus is an archived upstream project; its final signed release is used here.
 
 ## What the tray status means
 
@@ -40,9 +40,9 @@ This first release supports one controller and the standard gamepad sticks, butt
 |---|---|
 | Let's connect | Touch and hold the logo until it flashes, then click **It's flashing**. |
 | Finding / Pairing | Keep the logo flashing while the app finishes setup. |
-| Wake up & play | Pairing is saved and the PC is listening. Tap the logo once, then move a stick. |
-| Ready to play | The controller is sending actual wireless gamepad reports to Windows. |
-| Ready when you are | Pairing is saved, but the connection is stopped. Click **Connect**. |
+| Not connected yet | Pairing is saved and the PC is listening. Tap the logo once, then move a stick. |
+| Connected | The controller is sending actual wireless gamepad reports to Windows. |
+| Disconnected | Pairing is saved, but the connection is stopped. Click **Connect**. |
 | One quick setup / A quick fix first | Follow the instruction and use the large button. More detail is in **Settings**. |
 
 The tray tooltip also distinguishes **Not paired**, **Pairing**, **Paired · disconnected**, **Connected**, and **Needs attention**. Pairing alone is never reported as a live connection. The app only accepts the paired controller's network identity and creates one virtual Xbox controller.

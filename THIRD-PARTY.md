@@ -10,7 +10,7 @@ The complete license is included as `LICENSE`.
   differ, while the protocol implementation is retained.
 - `data-host/src/{adapters,controller,npcap}.rs` derives from upstream Windows
   transport/controller modules. The active host uses one exact controller,
-  gamepad-only output, bounded queues, disabled payload tracing, and supervised
+  gamepad and touchpad mouse output, bounded queues, disabled payload tracing, and supervised
   lifetime. It does not forward mouse, keyboard, microphone or rumble output.
 - `data-host/src/mapping.rs` retains the upstream controller-to-XInput mapping.
 

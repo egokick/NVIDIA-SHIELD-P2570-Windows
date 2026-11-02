@@ -2,16 +2,20 @@ use crate::controller::Pad;
 use anyhow::{Result, ensure};
 use vigem_client::{Client, TargetId, XGamepad, Xbox360Wired};
 
-/// Only ViGEm gamepad output. No global mouse, keyboard, media, audio or rumble.
+/// ViGEm gamepad and explicitly enabled controller touchpad mouse output.
 pub struct Output {
+    mouse: crate::mouse::Mouse,
     pad: Option<Xbox360Wired<Client>>,
+    pending: Option<(XGamepad, bool)>,
     pub slot: Option<u32>,
     pub ready_reported: bool,
 }
 impl Output {
     pub fn new() -> Self {
         Self {
+            mouse: crate::mouse::Mouse::default(),
             pad: None,
+            pending: None,
             slot: None,
             ready_reported: false,
         }
@@ -29,21 +33,34 @@ impl Output {
         let slot = pad.get_user_index()?;
         ensure!(slot <= 3, "invalid_xinput_slot");
         self.slot = Some(slot);
-        pad.update(&XGamepad::default())?;
+        submit_result(pad.update(&XGamepad::default()))?;
         Ok(())
     }
-    pub fn pad(&mut self, p: &Pad) -> Result<()> {
+    pub fn pad(&mut self, p: &Pad) -> Result<bool> {
+        self.pending = Some((crate::mapping::to_xgamepad(p), true));
+        self.flush()
+    }
+    pub fn flush(&mut self) -> Result<bool> {
+        let Some((report, live)) = self.pending else {
+            return Ok(false);
+        };
         if let Some(pad) = &mut self.pad {
-            pad.update(&crate::mapping::to_xgamepad(p))?;
+            if submit_result(pad.update(&report))? {
+                self.pending = None;
+                return Ok(live);
+            }
         }
-        Ok(())
+        Ok(false)
+    }
+    pub fn mouse(&mut self, t: &crate::controller::Trackpad) -> Result<()> {
+        self.mouse.report(*t)
     }
     pub fn release(&mut self) -> Result<()> {
+        let mouse = self.mouse.release();
         self.ready_reported = false;
-        if let Some(pad) = &mut self.pad {
-            pad.update(&XGamepad::default())?;
-        }
-        Ok(())
+        self.pending = Some((XGamepad::default(), false));
+        let gamepad = self.flush().map(|_| ());
+        mouse.and(gamepad)
     }
     pub fn close(&mut self) -> Result<()> {
         let release = self.release();
@@ -56,6 +73,16 @@ impl Output {
         release.and(unplug)
     }
 }
+// ViGEmBus returns STATUS_NO_MORE_ENTRIES when there is no queued USB read.
+// Its official client treats this as nonfatal. A later report gets another
+// opportunity; it must not be counted as delivered to XInput yet.
+fn submit_result(result: std::result::Result<(), vigem_client::Error>) -> Result<bool> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(vigem_client::Error::WinError(259)) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
 impl Drop for Output {
     fn drop(&mut self) {
         let _ = self.close();
@@ -65,6 +92,12 @@ impl Drop for Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn empty_usb_queue_is_not_a_dead_connection_or_a_delivered_report() {
+        assert!(!submit_result(Err(vigem_client::Error::WinError(259))).unwrap());
+        assert!(submit_result(Ok(())).unwrap());
+        assert!(submit_result(Err(vigem_client::Error::WinError(5))).is_err());
+    }
     #[test]
     fn media_and_trackpad_bits_do_not_become_gamepad_buttons() {
         let p = Pad {

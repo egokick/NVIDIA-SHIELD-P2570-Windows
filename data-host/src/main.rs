@@ -1,4 +1,4 @@
-//! Gamepad-only SHIELD transport, supervised by the installed hotspot owner.
+//! SHIELD gamepad and touchpad transport, supervised by the installed hotspot owner.
 #![allow(dead_code)]
 use anyhow::{Result, ensure};
 use clap::Parser;
@@ -20,6 +20,7 @@ mod diagnostic;
 use diagnostic::{Code, checkpoint};
 mod lease;
 mod mapping;
+mod mouse;
 mod npcap;
 mod output;
 mod platform;
@@ -131,7 +132,7 @@ fn main() {
     if !args.run {
         println!(
             "{}",
-            json!({"stage":"plan","hardware_opened":false,"required_channel":36,"gamepad_only":true,"starts_or_stops_ap":false,"requires_installed_private_config":true,"lifetime":"owner process and heartbeat","owner_heartbeat":"alive\\n every <=1s; loss >=3s stops child"})
+            json!({"stage":"plan","hardware_opened":false,"required_channel":36,"gamepad_only":false,"touchpad_mouse":true,"starts_or_stops_ap":false,"requires_installed_private_config":true,"lifetime":"owner process and heartbeat","owner_heartbeat":"alive\\n every <=1s; loss >=3s stops child"})
         );
         return;
     }
@@ -299,7 +300,7 @@ fn data_loop(
     let mut last_rx = None;
     let mut last_verify = Instant::now();
     let mut last_slow = Instant::now();
-    let (mut frames, mut pad_reports, mut ignored_trackpad) = (0u64, 0u64, 0u64);
+    let (mut frames, mut pad_reports, mut trackpad_reports) = (0u64, 0u64, 0u64);
     let result = (|| {
         log.event(
             "transport-ready",
@@ -311,10 +312,17 @@ fn data_loop(
                 diagnostic::transport_code(&failure_code)
             );
             let now = Instant::now();
+            if checkpoint(output.flush(), Code::OutputPad)? && !output.ready_reported {
+                log.event(
+                    "xinput-ready",
+                    json!({"slot":output.slot,"actual_pad_report":true}),
+                )?;
+                output.ready_reported = true;
+            }
             if last_verify.elapsed() >= Duration::from_secs(1) {
                 ensure!(owner.alive(), Code::OwnerExited);
                 platform::verify_adapter(r)?;
-                log.event("observing",json!({"received_frames":frames,"pad_reports":pad_reports,"ignored_trackpad_reports":ignored_trackpad,"xinput_slot":output.slot}))?;
+                log.event("observing",json!({"received_frames":frames,"pad_reports":pad_reports,"trackpad_reports_reports":trackpad_reports,"xinput_slot":output.slot}))?;
                 last_verify = now;
             }
             match in_rx.recv_timeout(Duration::from_millis(10)) {
@@ -333,7 +341,7 @@ fn data_loop(
                             &mut output,
                             log,
                             &mut pad_reports,
-                            &mut ignored_trackpad,
+                            &mut trackpad_reports,
                         )?;
                     }
                 }
@@ -358,7 +366,7 @@ fn data_loop(
                         &mut output,
                         log,
                         &mut pad_reports,
-                        &mut ignored_trackpad,
+                        &mut trackpad_reports,
                     )?;
                 }
                 if host.peer().is_some() {
@@ -407,7 +415,7 @@ fn handle_event(
     output: &mut output::Output,
     log: &mut Log,
     pad_reports: &mut u64,
-    ignored_trackpad: &mut u64,
+    trackpad_reports: &mut u64,
 ) -> Result<()> {
     match event {
         Event::Connected { .. } => {
@@ -422,17 +430,29 @@ fn handle_event(
                         if output.slot.is_none() {
                             checkpoint(output.plug(), Code::OutputPlug)?;
                         }
-                        if !output.ready_reported {
+                        let delivered = match output.pad(&p) {
+                            Ok(delivered) => delivered,
+                            Err(error) => {
+                                log.event(
+                                    "gamepad-output-failed",
+                                    json!({"driver_error":error.downcast_ref::<vigem_client::Error>().map(|e| format!("{e:?}"))}),
+                                )?;
+                                return Err(error.context(Code::OutputPad));
+                            }
+                        };
+                        if delivered && !output.ready_reported {
                             log.event(
                                 "xinput-ready",
                                 json!({"slot":output.slot,"actual_pad_report":true}),
                             )?;
                             output.ready_reported = true;
                         }
-                        checkpoint(output.pad(&p), Code::OutputPad)?;
                         *pad_reports += 1;
                     }
-                    controller::Report::Trackpad(_) => *ignored_trackpad += 1,
+                    controller::Report::Trackpad(t) if ctl.ready() => {
+                        output.mouse(&t)?;
+                        *trackpad_reports += 1;
+                    }
                     _ => {}
                 }
             }
