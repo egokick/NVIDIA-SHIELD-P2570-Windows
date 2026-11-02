@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace ShieldController;
 
-internal enum PreviewScene { NotPaired, Pairing, Provisioning, PairedDisconnected, Connected, Error, MissingDriver, Recovery, MultipleControllers, Settings, Help, NoController, Connecting, RestartRequired, InstallFailed, NetworkChoice }
+internal enum PreviewScene { NotPaired, Pairing, Provisioning, PairedDisconnected, Connected, ConnectedMappingsCustom, Error, MissingDriver, Recovery, MultipleControllers, Settings, Help, NoController, Connecting, RestartRequired, InstallFailed, NetworkChoice }
 
 internal sealed class MainForm : Form
 {
@@ -20,6 +20,12 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem trayConnect = new("Connect"), trayPair = new("Pair controller…"), trayForget = new("Forget controller…");
     private readonly SetupScrollPanel home = new(), settings = new(), help = new();
     private readonly TableLayoutPanel page = new();
+    private readonly Panel homeContent = new();
+    private readonly ControlMappingsPanel controlMappings;
+    private Size setupClientSize = new(520, 650);
+    private bool connectedLayout;
+    private bool calibrationPending;
+    private string? calibrationMonitor;
     private readonly bool preview;
     private bool busy, exiting, allowClose, automaticConnectAttempted, searchEmpty, previewRunning, restartRequired;
     private TaskCompletionSource? activeWork;
@@ -40,6 +46,10 @@ internal sealed class MainForm : Form
         ClientSize = new Size(520, 650); MinimumSize = new Size(440, 480);
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = !preview; Icon = appIcon; AutoScaleMode = AutoScaleMode.Dpi;
+        var (controls, controlsNeedReset) = LoadControlProfile(preview ? ProfileStore.Defaults : ProfileStore.Load);
+        controlMappings = new ControlMappingsPanel(controls, SaveControls) { Visible = false };
+        if (controlsNeedReset) controlMappings.SetSaveStatus("Saved controls could not load. Use Reset to repair them.", error: true);
+        if (preview) controlMappings.SetCalibration("32″ · 2560 × 1440", "Calibrated for this display · 100% is the recommended starting point.");
         BuildHome(); BuildSettings(); BuildHelp(); ShowPage(home);
         if (!preview)
         {
@@ -58,7 +68,9 @@ internal sealed class MainForm : Form
             owner.SessionFailed += () => Ui(() => { model.Fail("The connection needs another try."); ApplyState(); });
             owner.SessionEnded += code => Ui(() => { if (code == 0) model.SetDisconnected(); else model.Fail("We couldn't connect. Try again."); ApplyState(); });
             Shown += async (_, _) => await RefreshCapabilities(autoConnect: true);
-            stateTimer.Tick += (_, _) => ApplyState(); stateTimer.Start();
+            stateTimer.Tick += (_, _) => { ApplyState(); RefreshCalibrationIfNeeded(); }; stateTimer.Start();
+            Microsoft.Win32.SystemEvents.DisplaySettingsChanged += DisplaySettingsChanged;
+            Activated += (_, _) => RefreshCalibrationIfNeeded(force: true);
             Load += (_, _) => {
                 Rectangle work = Screen.FromControl(this).WorkingArea;
                 Size = new Size(Math.Min(Width, work.Width), Math.Min(Height, work.Height));
@@ -67,6 +79,12 @@ internal sealed class MainForm : Form
         }
         FormClosing += (_, e) => { if (!allowClose && !preview) { e.Cancel = true; Hide(); } };
         ApplyState();
+    }
+    internal static (ControlProfile Profile, bool NeedsReset) LoadControlProfile(Func<ControlProfile> load)
+    {
+        try { return (load(), false); }
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+        { return (ProfileStore.Defaults(), true); }
     }
     private void Ui(Action action)
     {
@@ -110,13 +128,80 @@ internal sealed class MainForm : Form
         var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
         footer.Controls.Add(Link("Need help?", () => ShowPage(help)));
         footer.Controls.Add(Link("Test controller", TestController)); page.Controls.Add(footer, 0, 8);
-        PreparePage(home, page, 440);
-        home.Resize += (_, _) => {
-            float scale = DeviceDpi / 96f; bool compact = home.ClientSize.Height < 600 * scale;
-            foreach (var item in new[] { (0, compact ? 36 : 48), (1, compact ? 24 : 32), (2, compact ? 44 : 50), (3, 54), (6, compact ? 54 : 58), (7, compact ? 28 : 32), (8, compact ? 34 : 40) })
-                page.RowStyles[item.Item1].Height = item.Item2 * scale;
-            headline.Font = home.ClientSize.Width < 470 * scale ? compactTitleFont : titleFont;
-        };
+        home.Dock = DockStyle.Fill; home.AutoScroll = true; home.BackColor = BackColor;
+        homeContent.BackColor = BackColor; homeContent.Controls.Add(page); homeContent.Controls.Add(controlMappings);
+        home.Controls.Add(homeContent); Controls.Add(home); home.Resize += (_, _) => LayoutHome(); LayoutHome();
+    }
+    private void LayoutHome()
+    {
+        if (homeContent.IsDisposed) return;
+        float scale = DeviceDpi / 96f; int S(int n) => (int)Math.Round(n * scale);
+        int width = Math.Max(S(350), home.ClientSize.Width), height;
+        bool wide = connectedLayout && width >= S(850);
+        if (connectedLayout && wide)
+        {
+            int heroWidth = Math.Clamp((int)(width * .34), S(286), S(360));
+            height = Math.Max(home.ClientSize.Height, ControlMappingsPanel.HeightForWidth(width - heroWidth, DeviceDpi));
+            page.SetBounds(0, 0, heroWidth, height);
+            controlMappings.SetBounds(heroWidth, 0, width - heroWidth, height);
+        }
+        else if (connectedLayout)
+        {
+            int heroHeight = S(460), controlsHeight = ControlMappingsPanel.HeightForWidth(width, DeviceDpi); height = heroHeight + controlsHeight;
+            page.SetBounds(0, 0, width, heroHeight);
+            controlMappings.SetBounds(0, heroHeight, width, controlsHeight);
+        }
+        else { height = Math.Max(home.ClientSize.Height, S(440)); page.SetBounds(0, 0, width, height); }
+        homeContent.Size = new Size(width, height); home.AutoScrollMinSize = new Size(0, height);
+        bool compact = page.Height < S(600);
+        page.Padding = new Padding(S(connectedLayout ? 24 : 32), S(20), S(connectedLayout ? 24 : 32), S(16));
+        foreach (var item in new[] { (0, compact ? 36 : 48), (1, compact ? 24 : 32), (2, compact ? 44 : 50), (3, 54), (6, compact ? 54 : 58), (7, compact ? 28 : 32), (8, compact ? 34 : 40) })
+            page.RowStyles[item.Item1].Height = S(item.Item2);
+        headline.Font = page.Width < S(470) ? compactTitleFont : titleFont;
+    }
+    private void SetConnectedLayout(bool connected)
+    {
+        if (connectedLayout == connected) return;
+        connectedLayout = connected; controlMappings.Visible = connected;
+        home.AutoScrollPosition = Point.Empty;
+        if (!preview)
+        {
+            Rectangle work = Screen.FromControl(this).WorkingArea;
+            if (connected)
+            {
+                setupClientSize = ClientSize;
+                ClientSize = new Size(Math.Min((int)(1040 * DeviceDpi / 96f), work.Width - (Width - ClientSize.Width)), Math.Min((int)(820 * DeviceDpi / 96f), work.Height - (Height - ClientSize.Height)));
+            }
+            else ClientSize = setupClientSize;
+            Location = new Point(Math.Clamp(Left, work.Left, Math.Max(work.Left, work.Right - Width)), Math.Clamp(Top, work.Top, Math.Max(work.Top, work.Bottom - Height)));
+        }
+        LayoutHome();
+        if (connected) RefreshCalibrationIfNeeded(force: true);
+    }
+    private void SaveControls(ControlProfile controls)
+    {
+        if (preview) { controlMappings.SetSaveStatus("Preview · changes are not saved"); return; }
+        try { ProfileStore.Save(controls); controlMappings.SetSaveStatus("✓  Saved · applies while you use the controller"); }
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException)
+        { controlMappings.SetSaveStatus("Could not save this choice. Choose another file or try again.", error: true); }
+    }
+    private void DisplaySettingsChanged(object? sender, EventArgs e) => Ui(() => { calibrationMonitor = null; RefreshCalibrationIfNeeded(force: true); });
+    private void RefreshCalibrationIfNeeded(bool force = false)
+    {
+        if (preview || !Visible || !connectedLayout || calibrationPending) return;
+        string monitor = Screen.FromPoint(Cursor.Position).DeviceName;
+        if (force || monitor != calibrationMonitor) _ = RefreshDisplayCalibration(monitor);
+    }
+    private async Task RefreshDisplayCalibration(string monitor)
+    {
+        if (calibrationPending || preview || IsDisposed) return;
+        calibrationPending = true;
+        try {
+            var calibration = await DisplayCalibration.ReadAsync();
+            if (!IsDisposed) controlMappings.SetCalibration(calibration.Title, calibration.Detail);
+        }
+        catch { if (!IsDisposed) controlMappings.SetCalibration("Automatic display calibration", "Uses the display under your pointer."); }
+        finally { calibrationPending = false; calibrationMonitor = monitor; }
     }
     private static void StylePicker(ChoicePicker picker)
     {
@@ -239,6 +324,7 @@ internal sealed class MainForm : Form
         requirements.Text = capabilities is null ? "Checking setup…" : RequirementSummary(capabilities);
         detail.Text = capabilities?.Requirements.FirstOrDefault(r => !r.Available)?.Label
             ?? (model.Paired ? "To change adapters, disconnect and forget this controller first." : "Wi-Fi carries controller input. Bluetooth isn't used.");
+        SetConnectedLayout(model.State == ControllerState.Connected && !exiting);
     }
     private async Task PrimaryClick()
     {
@@ -375,17 +461,18 @@ internal sealed class MainForm : Form
     internal void RenderPreview(PreviewScene scene, string path, Size? viewport = null)
     {
         if (viewport is Size size) Size = size;
-        bool paired = scene is PreviewScene.PairedDisconnected or PreviewScene.Connected or PreviewScene.Connecting or PreviewScene.Recovery or PreviewScene.Settings;
+        else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom) ClientSize = new Size(1040, 820);
+        bool paired = scene is PreviewScene.PairedDisconnected or PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.Connecting or PreviewScene.Recovery or PreviewScene.Settings;
         ApplyCapabilities(new(paired, scene == PreviewScene.Recovery,
             [new("windows", "Windows 11 24H2 or newer", true), new("npcap", "Npcap connection tool", scene is not (PreviewScene.MissingDriver or PreviewScene.RestartRequired or PreviewScene.InstallFailed)),
              new("vigem", "ViGEmBus gamepad driver", true), new("package", "Application files", true), new("wifi", "Wi-Fi available", true),
              new("pairing-radio", "One enabled Wi-Fi adapter", true), new("uplink", "Active internet connection", true)],
             [new("preview", "Wi-Fi")], [new("preview", "Ethernet")], "preview", "preview"));
         if (scene is PreviewScene.Pairing or PreviewScene.Provisioning) { model.BeginPairing(); busy = true; progress = scene == PreviewScene.Pairing ? "Searching" : "Pairing"; }
-        else if (scene is PreviewScene.Connected or PreviewScene.PairedDisconnected or PreviewScene.Connecting)
+        else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.PairedDisconnected or PreviewScene.Connecting)
         {
             previewRunning = true;
-            using var e = JsonDocument.Parse(scene == PreviewScene.Connected ? "{\"connected\":true,\"transport_ready\":true}" : scene == PreviewScene.Connecting ? "{}" : "{\"transport_ready\":true}"); model.ApplySession(e.RootElement);
+            using var e = JsonDocument.Parse(scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom ? "{\"connected\":true,\"transport_ready\":true}" : scene == PreviewScene.Connecting ? "{}" : "{\"transport_ready\":true}"); model.ApplySession(e.RootElement);
         }
         else if (scene == PreviewScene.Error) model.Fail("That didn't work. Try again, or open Help.");
         else if (scene == PreviewScene.InstallFailed) model.Fail("The installer didn't finish. Please try again.");
@@ -394,22 +481,41 @@ internal sealed class MainForm : Form
         else if (scene == PreviewScene.MultipleControllers) candidates.SetItems(new Candidate[] { new("first", "SHIELD Controller · 1a7e"), new("second", "SHIELD Controller · 9b42") });
         else if (scene == PreviewScene.NoController) searchEmpty = true;
         ApplyState();
+        if (scene == PreviewScene.ConnectedMappingsCustom)
+        {
+            var custom = ProfileStore.Defaults(); custom.Sensitivity = 1.45;
+            custom.Bindings["x"] = new ControlBinding { Kind = "key", Key = 0x20 };
+            custom.Bindings["y"] = new ControlBinding { Kind = "launch", Path = @"C:\Controller tools\Start game.ps1" };
+            custom.Bindings["left_stick"] = new ControlBinding { Kind = "key", Key = 0xA0 };
+            controlMappings.SetProfile(custom); controlMappings.SetSaveStatus("✓  Saved · applies while you use the controller");
+        }
         if (scene == PreviewScene.Settings) ShowPage(settings); else if (scene == PreviewScene.Help) ShowPage(help);
         static void PrepareControl(Control c) { _ = c.Handle; c.PerformLayout(); foreach (Control child in c.Controls) PrepareControl(child); }
-        PrepareControl(this); PerformLayout();
+        PrepareControl(this); LayoutHome(); PerformLayout(); PrepareControl(this); PerformLayout();
         using var bitmap = new Bitmap(Width, Height); DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(path);
         var active = scene == PreviewScene.Settings ? settings : scene == PreviewScene.Help ? help : home;
         string? scrolledPath = null;
+        string? controlsPath = null;
         if (active.VerticalScroll.Visible)
         {
+            if (connectedLayout && active == home)
+            {
+                active.ScrollPageDown();
+                controlsPath = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + "-controls.png");
+                using var controlsBitmap = new Bitmap(Width, Height); DrawToBitmap(controlsBitmap, new Rectangle(Point.Empty, Size)); controlsBitmap.Save(controlsPath);
+            }
             active.ScrollToBottom(); scrolledPath = Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + "-scrolled.png");
             using var bottom = new Bitmap(Width, Height); DrawToBitmap(bottom, new Rectangle(Point.Empty, Size)); bottom.Save(scrolledPath);
         }
+        if (scene == PreviewScene.ConnectedMappingsCustom)
+            controlMappings.MappingRows.Single(row => row.Id == "y").RenderChoicesPreview(Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + "-actions.png"));
         File.WriteAllText(Path.ChangeExtension(path, ".json"), JsonSerializer.Serialize(new { scene = scene.ToString(), state = model.State.ToString(), capture = "WinForms DrawToBitmap of production controls", visible = Visible, show_in_taskbar = ShowInTaskbar,
             owner_or_radio_calls = 0, dimensions = new { width = bitmap.Width, height = bitmap.Height }, heading = headline.Text, primary_action = primary.Text, primary_enabled = primary.Enabled,
             candidate_selection_visible = candidates.Visible, candidate_selected = candidates.SelectedItem is not null, settings_visible = scene == PreviewScene.Settings,
+            controls_panel_visible = connectedLayout, mapping_rows = connectedLayout ? ProfileStore.ControlIds.Length : 0,
+            controls_capture = controlsPath is not null,
             selected_wifi = wifi.SelectedItem?.ToString(), selected_uplink = uplink.SelectedItem?.ToString(), scrolled_capture = scrolledPath is not null,
             png_sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))) }));
     }
-    protected override void Dispose(bool disposing) { if (disposing) { stateTimer.Dispose(); tray?.Dispose(); owner.Dispose(); } base.Dispose(disposing); if (disposing) { appIcon.Dispose(); titleFont.Dispose(); compactTitleFont.Dispose(); } }
+    protected override void Dispose(bool disposing) { if (disposing) { if (!preview) Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= DisplaySettingsChanged; stateTimer.Dispose(); tray?.Dispose(); owner.Dispose(); } base.Dispose(disposing); if (disposing) { appIcon.Dispose(); titleFont.Dispose(); compactTitleFont.Dispose(); } }
 }

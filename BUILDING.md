@@ -20,6 +20,7 @@ Package staging must be a new directory. For another build, choose a fresh path 
 - `vendor/ozproto/`: protocol code with upstream licence/provenance.
 - `tray/`: Windows tray app, guided pairing, requirements and live status.
 - `installer/`: installer, uninstaller and verified official-driver download helper.
+- `contracts/default-controls.json`: shared C#/Rust desktop-mapping defaults fixture.
 
 Keep personal credentials, controller identifiers, local logs and test captures out of commits and release archives. A release must contain source/licence notices matching its binaries. Update `THIRD-PARTY.md` and regenerate notices whenever dependencies change.
 

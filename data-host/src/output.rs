@@ -5,7 +5,7 @@ use vigem_client::{Client, TargetId, XGamepad, Xbox360Wired};
 /// ViGEm gamepad plus controller mouse, arrow keys and Windows volume output.
 pub struct Output {
     mouse: crate::mouse::Mouse,
-    keys: crate::keyboard::Keys,
+    controls: crate::controls::Controls,
     pad: Option<Xbox360Wired<Client>>,
     pending: Option<(XGamepad, bool)>,
     pub slot: Option<u32>,
@@ -15,12 +15,23 @@ impl Output {
     pub fn new() -> Self {
         Self {
             mouse: crate::mouse::Mouse::default(),
-            keys: crate::keyboard::Keys::default(),
+            controls: crate::controls::Controls::default(),
             pad: None,
             pending: None,
             slot: None,
             ready_reported: false,
         }
+    }
+    pub fn initialize_controls(&mut self) -> Result<()> {
+        self.controls.initialize(&mut self.mouse)
+    }
+    pub fn controls_diagnostics(&self) -> (u64, u64, u64, u64) {
+        (
+            self.controls.reloads,
+            self.controls.profile_errors(),
+            self.controls.launches,
+            self.controls.launch_errors,
+        )
     }
     pub fn plug(&mut self) -> Result<()> {
         if self.pad.is_some() {
@@ -39,8 +50,8 @@ impl Output {
         Ok(())
     }
     pub fn pad(&mut self, p: &Pad) -> Result<bool> {
-        self.mouse.pad(p)?;
-        self.keys.report(p, std::time::Instant::now())?;
+        self.controls
+            .report(p, std::time::Instant::now(), &mut self.mouse)?;
         self.pending = Some((crate::mapping::to_xgamepad(p), true));
         self.flush()
     }
@@ -57,14 +68,14 @@ impl Output {
         Ok(false)
     }
     pub fn tick(&mut self, now: std::time::Instant) -> Result<()> {
-        self.keys.tick(now)
+        self.controls.tick(now, &mut self.mouse)
     }
     pub fn mouse(&mut self, t: &crate::controller::Trackpad) -> Result<()> {
         self.mouse.report(*t)
     }
     pub fn release(&mut self) -> Result<()> {
         let mouse = self.mouse.release();
-        let keyboard = self.keys.release();
+        let keyboard = self.controls.release(&mut self.mouse);
         self.ready_reported = false;
         self.pending = Some((XGamepad::default(), false));
         let gamepad = self.flush().map(|_| ());

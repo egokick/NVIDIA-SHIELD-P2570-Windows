@@ -1,54 +1,10 @@
-use crate::controller::{Pad, Trackpad, btn};
+use crate::controller::Trackpad;
 use anyhow::Result;
-use windows::Win32::{
-    Foundation::POINT,
-    Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint},
-    UI::{
-        HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext},
-        Input::KeyboardAndMouse::{
-            INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN,
-            MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
-            MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput,
-        },
-        WindowsAndMessaging::GetCursorPos,
-    },
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput,
 };
-
-// One gain for both axes preserves direction. Work in physical pixels under a
-// per-monitor DPI context, never multiply by DPI again. The geometric mean of
-// the current monitor's dimensions avoids over-speeding ultrawide desktops.
-fn display_gain(width: i32, height: i32) -> Option<f64> {
-    (width > 0 && height > 0).then(|| {
-        4.0 * ((f64::from(width) * f64::from(height) / (1920.0 * 1080.0)).sqrt()).clamp(0.75, 3.0)
-    })
-}
-
-fn current_display_gain() -> Option<f64> {
-    unsafe {
-        let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        if previous.0.is_null() {
-            return None;
-        }
-        let mut point = POINT::default();
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let gain = if GetCursorPos(&mut point).is_ok()
-            && GetMonitorInfoW(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &mut info)
-                .as_bool()
-        {
-            display_gain(
-                info.rcMonitor.right - info.rcMonitor.left,
-                info.rcMonitor.bottom - info.rcMonitor.top,
-            )
-        } else {
-            None // A locked/unavailable desktop leaves the last measured gain intact.
-        };
-        SetThreadDpiAwarenessContext(previous);
-        gain
-    }
-}
 
 #[derive(Default, Clone, Copy)]
 struct Motion {
@@ -59,9 +15,8 @@ struct Motion {
     sent_buttons: u8,
 }
 impl Motion {
-    fn pad(&mut self, p: &Pad) {
-        self.pad_buttons =
-            u8::from(p.buttons & btn::A != 0) | (u8::from(p.buttons & btn::B != 0) << 1);
+    fn mapped_buttons(&mut self, buttons: u8) {
+        self.pad_buttons = buttons & 7;
     }
     fn next(&mut self, t: Trackpad, gain: f64) -> (i32, i32) {
         let delta = if t.touch {
@@ -113,12 +68,14 @@ impl Motion {
 pub struct Mouse {
     motion: Motion,
     gain: f64,
+    sensitivity: f64,
 }
 impl Default for Mouse {
     fn default() -> Self {
         Self {
             motion: Motion::default(),
             gain: 4.0,
+            sensitivity: 1.0,
         }
     }
 }
@@ -127,16 +84,19 @@ impl Mouse {
         // Re-measure at each gesture, including monitor switches and resolution
         // changes. Freeze during a drag so crossing a monitor never changes speed mid-swipe.
         if t.touch && self.motion.anchor.is_none() {
-            if let Some(gain) = current_display_gain() {
+            if let Some(gain) = crate::display::calibration().ok().map(|c| c.default_gain) {
                 self.gain = gain;
             }
         }
-        let (dx, dy) = self.motion.next(t, self.gain);
+        let (dx, dy) = self.motion.next(t, self.gain * self.sensitivity);
         self.send(dx, dy)
     }
-    pub fn pad(&mut self, p: &Pad) -> Result<()> {
-        self.motion.pad(p);
+    pub fn mapped_buttons(&mut self, buttons: u8) -> Result<()> {
+        self.motion.mapped_buttons(buttons);
         self.send(0, 0)
+    }
+    pub fn sensitivity(&mut self, value: f64) {
+        self.sensitivity = value;
     }
     fn send(&mut self, dx: i32, dy: i32) -> Result<()> {
         let flags = self.motion.flags(dx, dy);
@@ -179,27 +139,6 @@ impl Drop for Mouse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn real_pad_a_and_b_map_to_clicks_with_release_edges() {
-        let mut motion = Motion::default();
-        for (buttons, expected) in [
-            (btn::A, MOUSEEVENTF_LEFTDOWN),
-            (btn::A | btn::B, MOUSEEVENTF_RIGHTDOWN),
-            (btn::B, MOUSEEVENTF_LEFTUP),
-            (
-                btn::X | btn::Y | btn::SPURIOUS | btn::START,
-                MOUSEEVENTF_RIGHTUP,
-            ),
-            (0, MOUSE_EVENT_FLAGS(0)),
-        ] {
-            motion.pad(&Pad {
-                buttons,
-                ..Pad::default()
-            });
-            assert_eq!(motion.flags(0, 0), expected);
-            motion.commit();
-        }
-    }
     fn touch(x: u16, y: u16) -> Trackpad {
         Trackpad {
             touch: true,
@@ -246,16 +185,6 @@ mod tests {
         assert_eq!(m.flags(0, 0), up); // rejected send did not commit
         m.commit();
         assert_eq!(m.flags(0, 0).0, 0);
-    }
-    #[test]
-    fn physical_resolution_scales_once_and_bounds_extremes() {
-        assert_eq!(display_gain(1920, 1080), Some(4.0));
-        assert_eq!(display_gain(3840, 2160), Some(8.0));
-        assert_eq!(display_gain(1080, 1920), Some(4.0));
-        assert_eq!(display_gain(0, 1080), None);
-        assert_eq!(display_gain(20000, 20000), Some(12.0));
-        assert_eq!(display_gain(640, 480), Some(3.0));
-        assert!((display_gain(2560, 1440).unwrap() - 16.0 / 3.0).abs() < 1e-10);
     }
     #[test]
     fn fractional_motion_accumulates_in_both_directions() {

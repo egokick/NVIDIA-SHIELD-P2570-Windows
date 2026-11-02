@@ -10,7 +10,7 @@ This is an independent community project, not an NVIDIA product. The P2570 uses 
 
 ## Get started
 
-1. Run **NVIDIA-SHIELD-P2570-Windows-Setup-0.1.1.exe** and click **Install**.
+1. Run **NVIDIA-SHIELD-P2570-Windows-Setup-0.2.0.exe** and click **Install**.
 2. Unplug the controller's USB cable from the PC. Touch and hold the green NVIDIA logo for **three seconds**, until it flashes. The picture in the app shows where to touch; the logo does not click. A wall USB charger is fine.
 3. Click **It's flashing**. The app finds, pairs, and connects your controller automatically. If it finds more than one controller, choose yours.
 4. When asked, tap the NVIDIA logo once and move a stick. **Connected** means your controller is sending wireless input. Open your game and choose its Xbox/controller input.
@@ -40,8 +40,17 @@ This release supports one controller and the standard gamepad sticks, buttons, D
 | A / B | Left-click / right-click; hold A to drag |
 | D-pad | Keyboard arrow keys; hold to repeat |
 | − / + | Volume down / up; hold to keep adjusting |
+| Play / pause | Toggle media playback |
+| Home / Back | Home / Escape keys |
+| X, Y, shoulders, triggers, stick clicks | No desktop action until you choose one |
 
-Touchpad speed adjusts to the monitor under the pointer at the start of each swipe, using its physical resolution with DPI-aware measurement. Windows pointer speed and acceleration still apply. Arrow repeat follows your Windows keyboard settings. These desktop actions work alongside the Xbox gamepad buttons, so a game that accepts both can respond to both. Disconnecting releases all held buttons and keys.
+When **Connected**, the app shows your desktop controls beside the controller picture. Use the **trackpad sensitivity slider** to make the pointer slower or faster. Its 100% default is calibrated to the monitor's resolution and reported physical size; Windows display scaling provides a size estimate when the monitor does not report one. Windows pointer speed and acceleration still apply.
+
+Each button has its own dropdown. Choose a keyboard key, mouse click, volume/media action, or **Run script or program…** and pick an EXE, CMD, BAT or PowerShell file. The selected file runs once when you press that controller button; selecting it in the app does not run it. **Reset to defaults** restores every desktop mapping and the calibrated 100% sensitivity together.
+
+PowerShell files run with `RemoteSigned` for that process only: locally created scripts work, downloaded scripts must satisfy Windows' signature rules, and organization policies still apply. The app does not change your permanent execution policy. See [Microsoft's execution policy documentation](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-5.1).
+
+Changes are saved automatically and apply without reconnecting. The additional controls are hidden when disconnected. Arrow repeat follows your Windows keyboard settings. These desktop actions work alongside the Xbox gamepad buttons, so a game that accepts both can respond to both. Disconnecting or changing mappings releases held desktop buttons and keys.
 
 The − / + controls adjust the current default playback device directly; + also unmutes it. The **Arctis Nova Pro Wireless** reports a fixed Windows volume of 100%, so this app adjusts that headset's actual hardware volume instead. Its base-station volume changes, while the Windows slider remains fixed. This headset control requires one matching base station and affects the wireless headphones, not its Line Out. No audio drivers or routing settings are changed.
 
@@ -60,7 +69,7 @@ Controller headset audio, microphone and vibration are not implemented. ViGEmBus
 
 The tray tooltip also distinguishes **Not paired**, **Pairing**, **Paired · disconnected**, **Connected**, and **Needs attention**. Pairing alone is never reported as a live connection. The app only accepts the paired controller's network identity and creates one virtual Xbox controller.
 
-**Test controller** opens Windows' standard Game Controllers panel. Set controller bindings and sensitivity in your game. **Settings** holds network choices, setup checks, logs, and connection controls. To change the saved controller or network adapters, disconnect, choose **Forget controller…**, confirm, and pair again. This removes the app's saved pairing; it does not reset controller firmware.
+**Test controller** opens Windows' standard Game Controllers panel. Set Xbox gamepad bindings in your game; the connected controls panel configures desktop actions. **Settings** holds network choices, setup checks, logs, and connection controls. To change the saved controller or network adapters, disconnect, choose **Forget controller…**, confirm, and pair again. This removes the app's saved pairing; it does not reset controller firmware.
 
 ## If it will not pair
 
@@ -74,7 +83,7 @@ Uninstall through **Windows Settings → Apps**. Uninstalling keeps shared Npcap
 
 ## Privacy and permissions
 
-No account, telemetry or cloud service is used for pairing or play. Pairing credentials stay in your Windows profile with access restricted to your account. The app temporarily starts its own hotspot and restores the prior idle-timeout policy when it stops. It does not register a system service, flash controller firmware, or replace the controller's USB driver.
+No account, telemetry or cloud service is used for pairing or play. Pairing credentials and your desktop controls stay in your Windows profile with access restricted to your account. Program mappings run only files you select, with your normal Windows permissions; PowerShell uses the process-only policy described above. The app temporarily starts its own hotspot and restores the prior idle-timeout policy when it stops. It does not register a system service, flash controller firmware, or replace the controller's USB driver.
 
 The release is currently **unsigned**; Windows may show an unknown-publisher warning. Download only from this repository's Releases page and compare the included SHA-256 checksum if needed.
 

@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "sensitivity": 1.0,
+  "bindings": {
+    "a": { "kind": "mouse_left" },
+    "b": { "kind": "mouse_right" },
+    "x": { "kind": "none" },
+    "y": { "kind": "none" },
+    "l1": { "kind": "none" },
+    "l2": { "kind": "none" },
+    "r1": { "kind": "none" },
+    "r2": { "kind": "none" },
+    "home": { "kind": "key", "key": 36 },
+    "play_pause": { "kind": "media_play_pause" },
+    "back": { "kind": "key", "key": 27 },
+    "left_stick": { "kind": "none" },
+    "right_stick": { "kind": "none" },
+    "dpad_up": { "kind": "key", "key": 38 },
+    "dpad_down": { "kind": "key", "key": 40 },
+    "dpad_left": { "kind": "key", "key": 37 },
+    "dpad_right": { "kind": "key", "key": 39 },
+    "volume_down": { "kind": "volume_down" },
+    "volume_up": { "kind": "volume_up" }
+  }
+}

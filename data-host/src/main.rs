@@ -17,7 +17,11 @@ use std::{
 mod adapters;
 mod arctis;
 mod controller;
+mod controls;
 mod diagnostic;
+mod display;
+mod launch;
+mod profile;
 use diagnostic::{Code, checkpoint};
 mod keyboard;
 mod lease;
@@ -32,6 +36,8 @@ mod volume;
 struct Args {
     #[arg(long)]
     run: bool,
+    #[arg(long, conflicts_with = "run")]
+    display_calibration: bool,
     #[arg(long, requires = "run")]
     owner_receipt: Option<PathBuf>,
     #[arg(long, requires = "run")]
@@ -132,6 +138,16 @@ fn latest_batch(
 fn main() {
     std::panic::set_hook(Box::new(|_| eprintln!("{{\"stage\":\"panic_redacted\"}}")));
     let args = Args::parse();
+    if args.display_calibration {
+        match display::calibration() {
+            Ok(value) => println!("{}", serde_json::to_string(&value).unwrap()),
+            Err(_) => {
+                eprintln!("display_calibration_unavailable");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     if !args.run {
         println!(
             "{}",
@@ -298,6 +314,7 @@ fn data_loop(
         }
     });
     let mut output = output::Output::new();
+    output.initialize_controls()?;
     let mut host = Host::new(Config::default());
     let mut ctl = controller::Controller::new(false);
     let mut last_rx = None;
@@ -326,7 +343,9 @@ fn data_loop(
                 ensure!(owner.alive(), Code::OwnerExited);
                 platform::verify_adapter(r)?;
                 let (volume_steps, volume_errors, volume_level_percent) = volume::counters();
-                log.event("observing",json!({"received_frames":frames,"pad_reports":pad_reports,"trackpad_reports":trackpad_reports,"xinput_slot":output.slot,"volume_steps":volume_steps,"volume_errors":volume_errors,"volume_level_percent":volume_level_percent,"volume_backend":volume::backend()}))?;
+                let (controls_reloads, controls_errors, launches, launch_errors) =
+                    output.controls_diagnostics();
+                log.event("observing",json!({"received_frames":frames,"pad_reports":pad_reports,"trackpad_reports":trackpad_reports,"xinput_slot":output.slot,"volume_steps":volume_steps,"volume_errors":volume_errors,"volume_level_percent":volume_level_percent,"volume_backend":volume::backend(),"controls_reloads":controls_reloads,"controls_errors":controls_errors,"launches":launches,"launch_errors":launch_errors}))?;
                 last_verify = now;
             }
             match in_rx.recv_timeout(Duration::from_millis(10)) {

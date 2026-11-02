@@ -6,3 +6,4 @@
 *.suo
 /private/
 /config.json
+/controls.json

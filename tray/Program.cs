@@ -118,6 +118,8 @@ internal static class SelfTests
     {
         int checks = 0;
         checks += PairingFlowTests.Run();
+        checks += ControlProfileTests.Run();
+        checks += ControlMappingsTests.Run();
         void Check(bool success) { checks++; if (!success) throw new InvalidOperationException("UI state check failed."); }
         Capabilities Paired(bool yes) => new(yes, false, [], [], [], null, null);
         var m = new StatusModel(); Check(m.State == ControllerState.NotPaired);
