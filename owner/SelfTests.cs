@@ -8,6 +8,12 @@ internal static partial class Program
     {
         int count = ConnectionSettings.SelfTest();
         void Check(bool value) { if (!value) throw new InvalidOperationException("Offline contract check failed."); count++; }
+        var first = Guid.Parse("11111111-1111-1111-1111-111111111111"); var second = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        Check(ChooseUplink([first, second], first, second) == first);
+        Check(ChooseUplink([first, second], null, second) == second);
+        Check(ChooseUplink([second], first, second) == second);
+        Check(ChooseUplink([second, first], null, null) == first);
+        Check(ChooseUplink([], first, second) is null);
         Check(WifiPermissionDenied(new UnauthorizedAccessException()));
         Check(WifiPermissionDenied(new System.Runtime.InteropServices.COMException("Denied", unchecked((int)0x80070005))));
         Check(!WifiPermissionDenied(new TimeoutException()) && !WifiPermissionDenied(new IOException()));

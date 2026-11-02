@@ -15,7 +15,8 @@ internal sealed class MainForm : Form
     private readonly ControllerIllustration illustration = new();
     private readonly ActionButton primary = new();
     private readonly Font titleFont = new("Segoe UI Semibold", 27), compactTitleFont = new("Segoe UI Semibold", 23);
-    private readonly ChoicePicker wifi = new("Choose Wi-Fi"), uplink = new("Choose internet connection"), candidates = new("Choose your controller");
+    private readonly ChoicePicker wifi = new("Choose Wi-Fi"), candidates = new("Choose your controller");
+    private AdapterChoice? selectedUplink;
     private readonly Button disconnect = new(), refresh = new(), forget = new();
     private readonly ChoicePicker band = new("Choose a band");
     private readonly Label bandHint = TextLabel("Automatic uses 5 GHz when available, otherwise 2.4 GHz.", 9);
@@ -229,10 +230,9 @@ internal sealed class MainForm : Form
     }
     private void BuildSettings()
     {
-        var layout = SecondaryPage(settings, "Settings", 740);
-        AddRow(layout, TextLabel("The app chooses these for you when it can."), 42);
+        var layout = SecondaryPage(settings, "Settings", 660);
+        AddRow(layout, TextLabel("Your connection is chosen automatically."), 42);
         AddRow(layout, TextLabel("Controller Wi-Fi", 10, true), 28); StylePicker(wifi); AddRow(layout, wifi, 42);
-        AddRow(layout, TextLabel("Internet connection", 10, true), 30); StylePicker(uplink); AddRow(layout, uplink, 42);
         AddRow(layout, TextLabel("Controller Wi-Fi band", 10, true), 30); StylePicker(band); AddRow(layout, band, 42);
         band.SetItems(ConnectionSettings.Choices);
         try { band.SelectedIndex = preview ? 0 : ConnectionSettings.Load(); }
@@ -244,7 +244,6 @@ internal sealed class MainForm : Form
         };
         AddRow(layout, bandHint, 52);
         wifi.SelectedIndexChanged += (_, _) => { candidates.SetItems([]); searchEmpty = false; ApplyState(); };
-        uplink.SelectedIndexChanged += (_, _) => { candidates.SetItems([]); searchEmpty = false; ApplyState(); };
         requirements.Dock = DockStyle.Fill; requirements.Margin = new Padding(0, 14, 0, 0); requirements.ForeColor = Palette.Muted; AddRow(layout, requirements, 62);
         detail.Dock = DockStyle.Fill; detail.ForeColor = Palette.Muted; detail.Font = new Font("Segoe UI", 9); AddRow(layout, detail, 64);
         var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
@@ -318,8 +317,8 @@ internal sealed class MainForm : Form
         }
         else if (capabilities is null)
             Present("Checking your PC…", "This will only take a moment.", "Please wait…", NextAction.None, IllustrationMode.Wake);
-        else if (!model.Paired && (wifi.SelectedItem is not AdapterChoice || uplink.SelectedItem is not AdapterChoice))
-            Present("Choose a connection.", "Your PC has more than one connection.\nChoose which one to use in Settings.", "Choose connection", NextAction.Settings, IllustrationMode.Error);
+        else if (!model.Paired && wifi.SelectedItem is not AdapterChoice)
+            Present("Choose Wi-Fi.", "Choose your PC's controller Wi-Fi adapter\nin Settings.", "Choose Wi-Fi", NextAction.Settings, IllustrationMode.Error);
         else if (!model.Paired && multiple)
             Present("Choose yours.", "We found more than one controller.\nChoose the one with the flashing logo.", "Pair this controller", NextAction.Pair, IllustrationMode.Pair);
         else if (!model.Paired)
@@ -338,7 +337,7 @@ internal sealed class MainForm : Form
         trayPair.Enabled = !locked && !Running && !model.Paired && Ready;
         trayForget.Enabled = forget.Enabled = !locked && !Running && capabilities?.RecoveryRequired == false;
         refresh.Enabled = !locked && !Running;
-        wifi.Enabled = uplink.Enabled = !locked && !Running && !model.Paired;
+        wifi.Enabled = !locked && !Running && !model.Paired;
         requirements.Text = capabilities is null ? "Checking setup…" : RequirementSummary(capabilities);
         detail.Text = capabilities?.Requirements.FirstOrDefault(r => !r.Available)?.Label
             ?? (model.Paired ? "To change adapters, disconnect and forget this controller first." : "Wi-Fi carries controller input. Bluetooth isn't used.");
@@ -379,7 +378,8 @@ internal sealed class MainForm : Form
     {
         if (value.Requirements.Length == 0) throw new InvalidDataException("The setup check returned no requirements.");
         capabilities = value; model.ApplyCapabilities(value);
-        SetAdapters(wifi, value.Wifi, value.SelectedWifi); SetAdapters(uplink, value.Uplink, value.SelectedUplink);
+        SetAdapters(wifi, value.Wifi, value.SelectedWifi);
+        selectedUplink = value.Uplink.FirstOrDefault(a => a.Guid == value.SelectedUplink) ?? value.Uplink.OrderBy(a => a.Guid, StringComparer.Ordinal).FirstOrDefault();
     }
     private async Task RefreshCapabilities(bool autoConnect = false)
     {
@@ -408,7 +408,7 @@ internal sealed class MainForm : Form
     }
     private async Task PairClick()
     {
-        if (Running || !Ready || model.Paired || wifi.SelectedItem is not AdapterChoice w || uplink.SelectedItem is not AdapterChoice u) return;
+        if (Running || !Ready || model.Paired || wifi.SelectedItem is not AdapterChoice w || selectedUplink is not AdapterChoice u) return;
         Candidate? target = candidates.SelectedItem as Candidate;
         progress = target is null ? "Searching" : "Pairing";
         await Work(async () => {
@@ -521,7 +521,7 @@ internal sealed class MainForm : Form
         else if (scene == PreviewScene.Error) model.Fail("That didn't work. Try again, or open Help.");
         else if (scene == PreviewScene.InstallFailed) model.Fail("The installer didn't finish. Please try again.");
         else if (scene == PreviewScene.RestartRequired) restartRequired = true;
-        else if (scene == PreviewScene.NetworkChoice) uplink.SetItems(new AdapterChoice[] { new("one", "Ethernet"), new("two", "Other internet connection") });
+        else if (scene == PreviewScene.NetworkChoice) wifi.SetItems(new AdapterChoice[] { new("one", "Wi-Fi"), new("two", "Other Wi-Fi adapter") });
         else if (scene == PreviewScene.MultipleControllers) candidates.SetItems(new Candidate[] { new("first", "SHIELD Controller · 1a7e"), new("second", "SHIELD Controller · 9b42") });
         else if (scene == PreviewScene.NoController) searchEmpty = true;
         ApplyState();
@@ -558,7 +558,7 @@ internal sealed class MainForm : Form
             candidate_selection_visible = candidates.Visible, candidate_selected = candidates.SelectedItem is not null, settings_visible = scene == PreviewScene.Settings,
             controls_panel_visible = connectedLayout, mapping_rows = connectedLayout ? ProfileStore.ControlIds.Length : 0,
             controls_capture = controlsPath is not null,
-            selected_wifi = wifi.SelectedItem?.ToString(), selected_uplink = uplink.SelectedItem?.ToString(), scrolled_capture = scrolledPath is not null,
+            selected_wifi = wifi.SelectedItem?.ToString(), selected_uplink = selectedUplink?.ToString(), scrolled_capture = scrolledPath is not null,
             png_sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))) }));
     }
     protected override void Dispose(bool disposing) { if (disposing) { if (!preview) Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= DisplaySettingsChanged; stateTimer.Dispose(); tray?.Dispose(); owner.Dispose(); } base.Dispose(disposing); if (disposing) { appIcon.Dispose(); titleFont.Dispose(); compactTitleFont.Dispose(); } }

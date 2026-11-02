@@ -6,6 +6,11 @@ using Windows.Networking.Connectivity;
 
 internal static partial class Program
 {
+    internal static Guid? ChooseUplink(IEnumerable<Guid> eligible, Guid? saved, Guid? preferred)
+    {
+        var ids = eligible.ToHashSet();
+        return saved.HasValue && ids.Contains(saved.Value) ? saved : preferred.HasValue && ids.Contains(preferred.Value) ? preferred : ids.Order().Select(id => (Guid?)id).FirstOrDefault();
+    }
     internal static bool WifiPermissionDenied(Exception error) => error is UnauthorizedAccessException || error.HResult == unchecked((int)0x80070005);
     internal static bool NpcapConfigured(bool serviceExists, bool libraryExists, object? adminOnly) => serviceExists && libraryExists && (adminOnly is null || adminOnly is int value && value == 0);
     private static string SetupRoot => Path.Combine(Root, "setup");
@@ -43,7 +48,8 @@ internal static partial class Program
         bool packageOkay = false; try { package = PackageManifest.Load(); packageOkay = true; } catch { }
         Requirement("package", "Installed application files match their package manifest", packageOkay);
         var names = NetworkInterface.GetAllNetworkInterfaces().Where(n => Guid.TryParse(n.Id, out _)).ToDictionary(n => Guid.Parse(n.Id), n => n.Name);
-        var wifi = new List<object>(); var uplinks = new List<object>();
+        var wifi = new List<object>(); var uplinks = new List<object>(); var uplinkIds = new HashSet<Guid>();
+        Guid? defaultUplink = null;
         if (supported)
         {
             try
@@ -63,8 +69,9 @@ internal static partial class Program
             }
             try
             {
+                defaultUplink = NetworkInformation.GetInternetConnectionProfile()?.NetworkAdapter?.NetworkAdapterId;
                 foreach (var p in NetworkInformation.GetConnectionProfiles().Where(p => p.NetworkAdapter is not null && p.GetNetworkConnectivityLevel() == NetworkConnectivityLevel.InternetAccess).GroupBy(p => p.NetworkAdapter.NetworkAdapterId).Select(g => g.First()))
-                { Guid id = p.NetworkAdapter.NetworkAdapterId; uplinks.Add(new { guid = id, name = names.GetValueOrDefault(id, "Internet connection") }); }
+                { Guid id = p.NetworkAdapter.NetworkAdapterId; uplinkIds.Add(id); uplinks.Add(new { guid = id, name = names.GetValueOrDefault(id, "Internet connection") }); }
             }
             catch { }
         }
@@ -79,7 +86,8 @@ internal static partial class Program
         bool paired = configured is not null && ProvisionMatches(configured);
         Requirement("channel", "A supported 2.4 GHz or 5 GHz controller channel is required (verified at Start)", true);
         Log("capabilities", new { paired, recovery_required = File.Exists(PrivateFiles.Recovery) || File.Exists(SetupActive), requirements,
-            wifi_adapters = wifi, uplink_adapters = uplinks, selected_wifi_guid = configured?.Wifi, selected_uplink_guid = configured?.Uplink,
+            wifi_adapters = wifi, uplink_adapters = uplinks, selected_wifi_guid = configured?.Wifi,
+            selected_uplink_guid = ChooseUplink(uplinkIds, configured?.Uplink, defaultUplink),
             runtime_supported = supported, band_preference = ConnectionSettings.Load(), offline_uplink_supported = false });
         return 0;
     }
