@@ -19,7 +19,7 @@ use windows::Win32::{
 // the current monitor's dimensions avoids over-speeding ultrawide desktops.
 fn display_gain(width: i32, height: i32) -> Option<f64> {
     (width > 0 && height > 0).then(|| {
-        2.0 * ((f64::from(width) * f64::from(height) / (1920.0 * 1080.0)).sqrt()).clamp(0.75, 3.0)
+        4.0 * ((f64::from(width) * f64::from(height) / (1920.0 * 1080.0)).sqrt()).clamp(0.75, 3.0)
     })
 }
 
@@ -118,7 +118,7 @@ impl Default for Mouse {
     fn default() -> Self {
         Self {
             motion: Motion::default(),
-            gain: 2.0,
+            gain: 4.0,
         }
     }
 }
@@ -249,13 +249,13 @@ mod tests {
     }
     #[test]
     fn physical_resolution_scales_once_and_bounds_extremes() {
-        assert_eq!(display_gain(1920, 1080), Some(2.0));
-        assert_eq!(display_gain(3840, 2160), Some(4.0));
-        assert_eq!(display_gain(1080, 1920), Some(2.0));
+        assert_eq!(display_gain(1920, 1080), Some(4.0));
+        assert_eq!(display_gain(3840, 2160), Some(8.0));
+        assert_eq!(display_gain(1080, 1920), Some(4.0));
         assert_eq!(display_gain(0, 1080), None);
-        assert_eq!(display_gain(20000, 20000), Some(6.0));
-        assert_eq!(display_gain(640, 480), Some(1.5));
-        assert!((display_gain(2560, 1440).unwrap() - 8.0 / 3.0).abs() < 1e-10);
+        assert_eq!(display_gain(20000, 20000), Some(12.0));
+        assert_eq!(display_gain(640, 480), Some(3.0));
+        assert!((display_gain(2560, 1440).unwrap() - 16.0 / 3.0).abs() < 1e-10);
     }
     #[test]
     fn fractional_motion_accumulates_in_both_directions() {
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn corrupt_jump_is_bounded_at_maximum_gain() {
         let mut m = Motion::default();
-        m.next(touch(0, 0), 6.0);
-        assert_eq!(m.next(touch(65535, 65535), 6.0), (300, 300));
+        m.next(touch(0, 0), 12.0);
+        assert_eq!(m.next(touch(65535, 65535), 12.0), (600, 600));
     }
 }

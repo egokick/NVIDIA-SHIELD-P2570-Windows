@@ -15,6 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 mod adapters;
+mod arctis;
 mod controller;
 mod diagnostic;
 use diagnostic::{Code, checkpoint};
@@ -25,6 +26,7 @@ mod mouse;
 mod npcap;
 mod output;
 mod platform;
+mod volume;
 
 #[derive(Parser)]
 struct Args {
@@ -323,7 +325,8 @@ fn data_loop(
             if last_verify.elapsed() >= Duration::from_secs(1) {
                 ensure!(owner.alive(), Code::OwnerExited);
                 platform::verify_adapter(r)?;
-                log.event("observing",json!({"received_frames":frames,"pad_reports":pad_reports,"trackpad_reports":trackpad_reports,"xinput_slot":output.slot}))?;
+                let (volume_steps, volume_errors, volume_level_percent) = volume::counters();
+                log.event("observing",json!({"received_frames":frames,"pad_reports":pad_reports,"trackpad_reports":trackpad_reports,"xinput_slot":output.slot,"volume_steps":volume_steps,"volume_errors":volume_errors,"volume_level_percent":volume_level_percent,"volume_backend":volume::backend()}))?;
                 last_verify = now;
             }
             match in_rx.recv_timeout(Duration::from_millis(10)) {

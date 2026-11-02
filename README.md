@@ -43,6 +43,8 @@ This release supports one controller and the standard gamepad sticks, buttons, D
 
 Touchpad speed adjusts to the monitor under the pointer at the start of each swipe, using its physical resolution with DPI-aware measurement. Windows pointer speed and acceleration still apply. Arrow repeat follows your Windows keyboard settings. These desktop actions work alongside the Xbox gamepad buttons, so a game that accepts both can respond to both. Disconnecting releases all held buttons and keys.
 
+The − / + controls adjust the current default playback device directly; + also unmutes it. The **Arctis Nova Pro Wireless** reports a fixed Windows volume of 100%, so this app adjusts that headset's actual hardware volume instead. Its base-station volume changes, while the Windows slider remains fixed. This headset control requires one matching base station and affects the wireless headphones, not its Line Out. No audio drivers or routing settings are changed.
+
 Controller headset audio, microphone and vibration are not implemented. ViGEmBus is an archived upstream project; its final signed release is used here.
 
 ## What the tray status means

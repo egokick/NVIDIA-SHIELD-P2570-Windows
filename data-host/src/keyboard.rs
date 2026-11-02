@@ -3,8 +3,8 @@ use crate::controller::{Pad, key};
 use anyhow::Result;
 use std::time::{Duration, Instant};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput, VIRTUAL_KEY, VK_VOLUME_DOWN, VK_VOLUME_UP,
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+    KEYEVENTF_SCANCODE, SendInput, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETKEYBOARDDELAY, SPI_GETKEYBOARDSPEED, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
@@ -159,7 +159,7 @@ impl State {
     }
 }
 
-fn input(key: Key, down: bool) -> INPUT {
+fn input(key: Key, down: bool) -> Option<INPUT> {
     let (virtual_key, scan, mut flags) = match key {
         Key::Up => (
             VIRTUAL_KEY(0),
@@ -181,13 +181,12 @@ fn input(key: Key, down: bool) -> INPUT {
             0x4b,
             KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY,
         ),
-        Key::VolumeUp => (VK_VOLUME_UP, 0, KEYBD_EVENT_FLAGS(0)),
-        Key::VolumeDown => (VK_VOLUME_DOWN, 0, KEYBD_EVENT_FLAGS(0)),
+        Key::VolumeUp | Key::VolumeDown => return None,
     };
     if !down {
         flags |= KEYEVENTF_KEYUP;
     }
-    INPUT {
+    Some(INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
@@ -197,11 +196,17 @@ fn input(key: Key, down: bool) -> INPUT {
                 ..Default::default()
             },
         },
-    }
+    })
 }
 fn emit(key: Key, down: bool) -> Result<()> {
+    let Some(input) = input(key, down) else {
+        if down {
+            crate::volume::adjust(key == Key::VolumeUp);
+        }
+        return Ok(());
+    };
     // A single event makes acceptance atomic for our held-state bookkeeping.
-    if unsafe { SendInput(&[input(key, down)], std::mem::size_of::<INPUT>() as i32) } != 1 {
+    if unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) } != 1 {
         anyhow::bail!("keyboard_input_rejected");
     }
     Ok(())
@@ -476,15 +481,15 @@ mod tests {
         );
     }
     #[test]
-    fn native_events_use_extended_arrow_scan_codes_and_volume_virtual_keys() {
+    fn native_events_use_extended_arrow_scan_codes_and_no_volume_keystrokes() {
         for (key, scan) in [
             (Key::Up, 0x48),
             (Key::Right, 0x4d),
             (Key::Down, 0x50),
             (Key::Left, 0x4b),
         ] {
-            let down = unsafe { input(key, true).Anonymous.ki };
-            let up = unsafe { input(key, false).Anonymous.ki };
+            let down = unsafe { input(key, true).unwrap().Anonymous.ki };
+            let up = unsafe { input(key, false).unwrap().Anonymous.ki };
             assert_eq!(down.wVk, VIRTUAL_KEY(0));
             assert_eq!(down.wScan, scan);
             assert_eq!(down.dwFlags, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_SCANCODE);
@@ -493,13 +498,9 @@ mod tests {
                 KEYEVENTF_EXTENDEDKEY | KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
             );
         }
-        assert_eq!(
-            unsafe { input(Key::VolumeUp, true).Anonymous.ki.wVk },
-            VK_VOLUME_UP
-        );
-        assert_eq!(
-            unsafe { input(Key::VolumeDown, true).Anonymous.ki.wVk },
-            VK_VOLUME_DOWN
-        );
+        for key in [Key::VolumeUp, Key::VolumeDown] {
+            assert!(input(key, true).is_none());
+            assert!(input(key, false).is_none());
+        }
     }
 }

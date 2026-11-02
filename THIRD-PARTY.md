@@ -14,6 +14,10 @@ The complete license is included as `LICENSE`.
   disabled payload tracing, and supervised lifetime. It does not forward
   headset audio, microphone or rumble output.
 - `data-host/src/mapping.rs` retains the upstream controller-to-XInput mapping.
+- The independently implemented Nova Pro Wireless volume control uses protocol
+  facts documented in [GGWP's findings](https://github.com/hughes/GGWP/blob/main/FINDINGS.md).
+  Only the settings query and bounded headphone-volume command are used; no
+  device-flash, firmware, or audio-routing commands are sent.
 
 The maintained C# owner, launch/configuration scripts and runtime composition
 are in this directory alongside the corresponding source. Keep this notice,
