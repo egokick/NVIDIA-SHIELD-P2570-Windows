@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace ShieldController;
 
-internal sealed class OwnerClient : IDisposable
+internal sealed class OwnerClient : IDisposable, IPairingService
 {
     internal static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NVIDIA-SHIELD-P2570-Windows");
     internal static string Executable => Path.Combine(Root, "bin", "owner", "ShieldControllerOwner.exe");
@@ -79,7 +79,7 @@ internal sealed class OwnerClient : IDisposable
             throw new TimeoutException("Controller setup is taking longer than expected. Wait for cleanup before retrying; see the log folder.");
         }
     }
-    internal async Task<Capabilities> GetCapabilities()
+    public async Task<Capabilities> GetCapabilities()
     {
         var events = await Command(["--mode", "capabilities"], TimeSpan.FromSeconds(40));
         var root = events.LastOrDefault(e => Phase(e) == "capabilities");
@@ -92,14 +92,14 @@ internal sealed class OwnerClient : IDisposable
     private static AdapterChoice[] ReadAdapters(JsonElement d, string key) => d.GetProperty(key).EnumerateArray().Select(a => new AdapterChoice(a.GetProperty("guid").GetString()!, a.GetProperty("name").GetString()!)).ToArray();
     internal static string Phase(JsonElement e) => e.TryGetProperty("phase", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString()! : "";
     internal static string? OptionalString(JsonElement e, string key) => e.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
-    internal async Task<Candidate[]> Discover(string wifi, string uplink)
+    public async Task<Candidate[]> Discover(string wifi, string uplink)
     {
         CreatePrivateDirectory(Root);
         var events = await Command(["--mode", "discover", "--wifi-guid", wifi, "--uplink-guid", uplink], TimeSpan.FromSeconds(75));
         return events.Where(e => Phase(e) == "candidate").Select(e => e.GetProperty("detail"))
             .Select(d => new Candidate(d.GetProperty("target_id_hash").GetString()!, d.GetProperty("display_name").GetString()!)).DistinctBy(c => c.TargetIdHash).ToArray();
     }
-    internal async Task Pair(Candidate target, string wifi, string uplink)
+    public async Task Pair(Candidate target, string wifi, string uplink)
     {
         CreatePrivateDirectory(Root);
         var events = await Command(["--mode", "pair", "--target-id-hash", target.TargetIdHash, "--wifi-guid", wifi, "--uplink-guid", uplink], TimeSpan.FromSeconds(125));

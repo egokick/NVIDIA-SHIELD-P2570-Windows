@@ -11,12 +11,13 @@ This is an independent community project, not an NVIDIA product. The P2570 uses 
 ## Get started
 
 1. Run **NVIDIA-SHIELD-P2570-Windows-Setup-0.1.0.exe** and click **Install**.
-2. Open the tray app. If a driver is missing, use its installation button and finish the official driver's setup prompts.
-3. Select the Wi-Fi and Internet adapters in the app. Unplug the controller's USB cable from the PC; a wall USB charger is fine. Rest your fingertip on the green NVIDIA logo for about **three seconds**, until it flashes. The logo is touch sensitive; it does not click.
-4. Click **Find controller**, select the discovered controller, then click **Pair selected controller**. Wait for pairing to finish.
-5. Click **Connect**, briefly touch the NVIDIA logo to wake the controller, and move a stick. Once the status reads **Connected**, open your game and choose its Xbox/controller input.
+2. Unplug the controller's USB cable from the PC. Touch and hold the green NVIDIA logo for **three seconds**, until it flashes. The picture in the app shows where to touch; the logo does not click. A wall USB charger is fine.
+3. Click **It's flashing**. The app finds, pairs, and connects your controller automatically. If it finds more than one controller, choose yours.
+4. When asked, tap the NVIDIA logo once and move a stick. **Ready to play** means your controller is sending wireless input. Open your game and choose its Xbox/controller input.
 
-After pairing, a short touch on the NVIDIA logo wakes the controller. Keep the tray app running while you play. **Disconnect** stops the connection; **Exit** closes the app and restores the network settings it temporarily changed.
+If your PC needs a driver, the app shows one setup button at a time. Click it and follow the official installer's prompts. Network adapters are selected automatically when there is one clear choice; the app asks you to choose in **Settings** when needed.
+
+Next time, open the app and briefly touch the NVIDIA logo. Your pairing is saved, and the app starts the connection automatically. **Done**, **Hide to tray**, or closing the window keeps it running while you play. Click its tray icon to reopen it. **Settings → Disconnect** stops the connection; **Exit** in the tray menu closes the app and restores the network settings it temporarily changed.
 
 The app installer needs no .NET or developer tools. Driver installation may require a Windows administrator prompt. Npcap is installed separately through its official interactive setup. The app downloads the official driver installers directly and verifies their signatures and hashes before opening them.
 
@@ -37,15 +38,16 @@ This first release supports one controller and the standard gamepad sticks, butt
 
 | Status | Meaning |
 |---|---|
-| Not paired | Complete the pairing guide first. |
-| Pairing | The app is searching for a controller or provisioning the one you selected. |
-| Paired · disconnected | Pairing is saved. The description says whether the app is stopped, starting, or listening for input. |
-| Connected | The selected controller is sending actual gamepad reports to Windows. |
-| Needs attention | Read the setup guidance, use Refresh, or open logs for the failed operation. Recover connection appears when cleanup is pending. |
+| Let's connect | Touch and hold the logo until it flashes, then click **It's flashing**. |
+| Finding / Pairing | Keep the logo flashing while the app finishes setup. |
+| Wake up & play | Pairing is saved and the PC is listening. Tap the logo once, then move a stick. |
+| Ready to play | The controller is sending actual wireless gamepad reports to Windows. |
+| Ready when you are | Pairing is saved, but the connection is stopped. Click **Connect**. |
+| One quick setup / A quick fix first | Follow the instruction and use the large button. More detail is in **Settings**. |
 
-Pairing alone is never reported as a live connection. The app only accepts the selected controller's network identity and creates one virtual Xbox controller.
+The tray tooltip also distinguishes **Not paired**, **Pairing**, **Paired · disconnected**, **Connected**, and **Needs attention**. Pairing alone is never reported as a live connection. The app only accepts the paired controller's network identity and creates one virtual Xbox controller.
 
-**Test controller** opens Windows' standard Game Controllers panel. Set controller bindings and sensitivity in your game. To change the saved controller or network adapters, disconnect, choose **Forget controller…** from the tray menu, confirm, and pair again. This removes the app's saved pairing; it does not reset controller firmware.
+**Test controller** opens Windows' standard Game Controllers panel. Set controller bindings and sensitivity in your game. **Settings** holds network choices, setup checks, logs, and connection controls. To change the saved controller or network adapters, disconnect, choose **Forget controller…**, confirm, and pair again. This removes the app's saved pairing; it does not reset controller firmware.
 
 ## If it will not pair
 

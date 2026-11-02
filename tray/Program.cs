@@ -14,12 +14,13 @@ internal static class Program
     private static int Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+        string checkpoint = "argument-validation";
         try
         {
             if (args.SequenceEqual(new[] { "--selftest" })) return SelfTests.Run();
             if (args.Length is 4 or 6 && args[0] == "--render-preview-state" && args[2] == "--output")
             {
-                if (!Enum.TryParse<ControllerState>(args[1], true, out var state) || !Enum.IsDefined(state)) throw new ArgumentException("Unknown preview state.");
+                if (!Enum.TryParse<PreviewScene>(args[1], true, out var state) || !Enum.IsDefined(state)) throw new ArgumentException("Unknown preview state.");
                 string path = Path.GetFullPath(args[3]);
                 if (!path.Split(Path.DirectorySeparatorChar).Contains("debug", StringComparer.OrdinalIgnoreCase) || Path.GetExtension(path) != ".png") throw new ArgumentException("Preview output must be a PNG under debug.");
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -27,7 +28,7 @@ internal static class Program
                 if (args.Length == 6)
                 {
                     string[] dimensions = args[5].Split('x');
-                    if (args[4] != "--viewport" || dimensions.Length != 2 || !int.TryParse(dimensions[0], out int w) || !int.TryParse(dimensions[1], out int h) || w is < 620 or > 3840 || h is < 450 or > 2160) throw new ArgumentException("Invalid preview viewport.");
+                    if (args[4] != "--viewport" || dimensions.Length != 2 || !int.TryParse(dimensions[0], out int w) || !int.TryParse(dimensions[1], out int h) || w is < 440 or > 3840 || h is < 480 or > 2160) throw new ArgumentException("Invalid preview viewport.");
                     size = new Size(w, h);
                 }
                 using var preview = new MainForm(preview: true);
@@ -35,23 +36,39 @@ internal static class Program
                 return 0;
             }
             if (args.Length > 1 || args.Length == 1 && args[0] is not ("--show" or "--exit")) throw new ArgumentException("Use --show or --exit.");
+            checkpoint = "single-instance";
             using var mutex = new Mutex(true, @"Local\" + PipeName, out bool first);
-            if (!first) return Send(args.Length == 1 && args[0] == "--exit" ? "exit" : "show");
+            if (!first)
+            {
+                checkpoint = "existing-instance-command";
+                return Send(args.Length == 1 && args[0] == "--exit" ? "exit" : "show");
+            }
             if (args.SequenceEqual(new[] { "--exit" })) return 0;
+            checkpoint = "create-window";
             using var form = new MainForm();
             _ = form.Handle; // IPC can enqueue work before Application.Run shows the window.
             using var cancellation = new CancellationTokenSource();
             Task server = StartServer(form, cancellation.Token, PipeName);
+            checkpoint = "window-message-loop";
             Application.Run(form);
+            checkpoint = "stop-command-server";
             cancellation.Cancel();
             try { server.GetAwaiter().GetResult(); } catch (OperationCanceledException) { }
             mutex.ReleaseMutex();
             return 0;
         }
-        catch (Exception)
+        catch (Exception error)
         {
-            if (args.Contains("--selftest") || args.Contains("--render-preview-state") || args.Contains("--exit")) return 1;
-            MessageBox.Show("The controller application could not start. Reinstall it, or open its log folder for details.", "NVIDIA SHIELD P2570", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (args.Contains("--selftest") || args.Contains("--render-preview-state") || args.Contains("--exit"))
+            {
+                Console.Error.WriteLine(JsonSerializer.Serialize(new { phase = "tray-error", checkpoint, type = error.GetType().FullName, hresult = $"0x{error.HResult:X8}", stack_trace = error.StackTrace }));
+                return 1;
+            }
+            string? log = CrashDiagnostics.Record(error, checkpoint);
+            string description = checkpoint == "window-message-loop"
+                ? "The controller application stopped unexpectedly."
+                : "The controller application could not open.";
+            MessageBox.Show(description + (log is null ? "\n\nThe diagnostic log could not be written." : "\n\nDiagnostic details were saved to:\n" + log), "NVIDIA SHIELD P2570", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
     }
@@ -100,6 +117,7 @@ internal static class SelfTests
     internal static int Run()
     {
         int checks = 0;
+        checks += PairingFlowTests.Run();
         void Check(bool success) { checks++; if (!success) throw new InvalidOperationException("UI state check failed."); }
         Capabilities Paired(bool yes) => new(yes, false, [], [], [], null, null);
         var m = new StatusModel(); Check(m.State == ControllerState.NotPaired);
