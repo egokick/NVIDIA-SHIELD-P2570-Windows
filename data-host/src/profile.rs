@@ -86,6 +86,7 @@ impl<'de> Deserialize<'de> for Action {
 #[serde(rename_all = "snake_case")]
 pub enum StickMode {
     Cursor,
+    Scroll,
     Arrows,
     Wasd,
     None,
@@ -125,11 +126,22 @@ impl Default for Stick {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sticks {
     pub left: Stick,
     pub right: Stick,
+}
+impl Default for Sticks {
+    fn default() -> Self {
+        Self {
+            left: Stick::default(),
+            right: Stick {
+                mode: StickMode::Scroll,
+                ..Stick::default()
+            },
+        }
+    }
 }
 impl Sticks {
     pub fn as_array(&self) -> [Stick; 2] {

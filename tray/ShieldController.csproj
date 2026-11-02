@@ -12,7 +12,7 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
     <Product>NVIDIA SHIELD P2570 for Windows</Product>
     <Description>Wireless gamepad connection and pairing for the NVIDIA SHIELD P2570.</Description>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>

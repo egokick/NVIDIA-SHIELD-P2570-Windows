@@ -19,6 +19,7 @@ trait Sink {
     fn launch(&mut self, path: &str);
     fn cursor_speed(&mut self) -> f64;
     fn cursor(&mut self, x: i32, y: i32) -> Result<()>;
+    fn wheel(&mut self, delta: i32) -> Result<()>;
 }
 fn physical(p: &Pad, previous: &[bool; 19]) -> [bool; 19] {
     let trigger = |value: u16, held: bool| if held { value > 26214 } else { value >= 32768 };
@@ -206,6 +207,10 @@ impl Engine {
             0.0
         };
         let (x, y) = self.movement.tick(now, self.profile.sticks, speed);
+        let wheel = self.movement.take_wheel();
+        if wheel != 0 {
+            sink.wheel(wheel)?;
+        }
         if x != 0 || y != 0 {
             sink.cursor(x, y)?;
         }
@@ -263,6 +268,9 @@ impl Sink for Native<'_> {
     }
     fn cursor(&mut self, x: i32, y: i32) -> Result<()> {
         self.mouse.cursor_motion(x, y)
+    }
+    fn wheel(&mut self, delta: i32) -> Result<()> {
+        self.mouse.wheel(delta)
     }
 }
 
@@ -355,6 +363,7 @@ mod tests {
         launches: Vec<String>,
         reject: Option<u16>,
         cursor: Vec<(i32, i32)>,
+        wheel: Vec<i32>,
     }
     impl Sink for Fake {
         fn key(&mut self, k: u16, d: bool) -> Result<()> {
@@ -377,6 +386,10 @@ mod tests {
         }
         fn cursor(&mut self, x: i32, y: i32) -> Result<()> {
             self.cursor.push((x, y));
+            Ok(())
+        }
+        fn wheel(&mut self, delta: i32) -> Result<()> {
+            self.wheel.push(delta);
             Ok(())
         }
     }
@@ -741,5 +754,38 @@ mod tests {
         e.tick(now + Duration::from_secs(52), Timing::default(), &mut s)
             .unwrap();
         assert_eq!(s.cursor.len(), count);
+    }
+
+    #[test]
+    fn wheel_output_is_independent_of_cursor_and_stops_on_release() {
+        let mut e = Engine::default();
+        let mut s = Fake::default();
+        let now = Instant::now();
+        e.report(
+            &Pad {
+                ry: 0,
+                ..Pad::default()
+            },
+            now,
+            Timing::default(),
+            &mut s,
+        )
+        .unwrap();
+        for i in 0..=100 {
+            e.tick(
+                now + Duration::from_millis(i * 10),
+                Timing::default(),
+                &mut s,
+            )
+            .unwrap();
+        }
+        assert!(s.cursor.is_empty());
+        assert!(s.keys.is_empty());
+        assert!((840..=960).contains(&s.wheel.iter().sum::<i32>()));
+        e.release(&mut s).unwrap();
+        let count = s.wheel.len();
+        e.tick(now + Duration::from_secs(2), Timing::default(), &mut s)
+            .unwrap();
+        assert_eq!(s.wheel.len(), count);
     }
 }

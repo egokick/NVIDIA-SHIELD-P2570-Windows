@@ -38,12 +38,12 @@ internal static class ControlMappingsTests
         using (var panel = new ControlMappingsPanel(initial, profile => { saves++; lastSaved = profile; }))
         {
             int before = saves;
-            Check(panel.LeftStick.MovementPicker.SelectedItem?.Kind == "cursor" && panel.RightStick.MovementPicker.SelectedItem?.Kind == "cursor", "both joystick movement menus default to cursor");
+            Check(panel.LeftStick.MovementPicker.SelectedItem?.Kind == "cursor" && panel.RightStick.MovementPicker.SelectedItem?.Kind == "scroll", "left stick defaults to cursor and right stick to scrolling");
             panel.LeftStick.SpeedSlider.Value = 160; panel.RightStick.SpeedSlider.Value = 75;
             Check(saves == before, "independent stick sliders debounce"); panel.SavePendingChanges();
             Check(lastSaved!.Sticks.Left.Sensitivity == 1.6 && lastSaved.Sticks.Right.Sensitivity == .75 && lastSaved.Sensitivity == 1, "stick sensitivity is independent of each other and the trackpad");
             panel.LeftStick.MovementPicker.SelectedIndex = 2;
-            Check(lastSaved!.Sticks.Left.Mode == "wasd" && lastSaved.Sticks.Right.Mode == "cursor" && !panel.LeftStick.SpeedSlider.Enabled, "stick movement menu saves the selected mode and disables unused cursor speed");
+            Check(lastSaved!.Sticks.Left.Mode == "wasd" && lastSaved.Sticks.Right.Mode == "scroll" && !panel.LeftStick.SpeedSlider.Enabled, "stick movement menu saves the selected mode and disables unused cursor speed");
             panel.LeftStick.ToggleAdvanced(); panel.LeftStick.DeadzoneSlider.Value = 10; panel.SavePendingChanges();
             Check(lastSaved!.Sticks.Left.Deadzone == .10 && panel.LeftStick.DeadzoneSlider.Enabled && !panel.LeftStick.CurvePicker.Enabled && !panel.LeftStick.SmoothingPicker.Enabled, "keyboard movement exposes its dead zone while disabling cursor-only response settings");
             panel.LeftStick.ToggleAdvanced();
@@ -62,7 +62,7 @@ internal static class ControlMappingsTests
             panel.DpadModePicker.SelectedIndex = 0;
             Check(ProfileStore.DpadIds.All(id => lastSaved!.Bindings[id] == initial.Bindings[id]), "D-pad arrow preset restores arrow keys");
             panel.ResetDefaults();
-            Check(lastSaved!.Sticks.Left == new StickSettings() && lastSaved.Sticks.Right == new StickSettings() && panel.LeftStick.SpeedSlider.Value == 100 && panel.RightStick.SpeedSlider.Value == 100, "reset restores all motion settings and visible sliders");
+            Check(lastSaved!.Sticks.Left == new StickSettings() && lastSaved.Sticks.Right == new StickSettings { Mode = "scroll" } && panel.LeftStick.SpeedSlider.Value == 100 && panel.RightStick.SpeedSlider.Value == 100, "reset restores all motion settings and visible sliders");
             lastSaved.Sticks.Left.Mode = "none";
             Check(panel.LeftStick.CurrentSettings.Mode == "cursor", "save callback cannot mutate displayed stick settings");
             Check(!MappingChoices.ForControl("a").Any(choice => choice.Kind == "cursor") && MappingChoices.ForControl("dpad_left").Any(choice => choice.Kind == "cursor"), "cursor choices are available only for D-pad directions");

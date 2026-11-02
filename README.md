@@ -15,7 +15,7 @@ No accounts. No terminal commands. No dependency hunting. First-time setup needs
 
 <p align="center"><img src="docs/images/your-controls.png" width="880" alt="The SHIELD tray app shows Connected wirelessly, independent trackpad and joystick speed sliders, movement menus, button mappings and Reset all controls to default." /></p>
 
-**Make it yours.** Move the cursor with either stick or the trackpad, adjust each speed, and choose what your buttons do. [Tune your sticks](docs/joystick-controls.md), or reset everything with one click. Closing the window keeps your controller running in the tray.
+**Make it yours.** Move the cursor with the left stick or trackpad, scroll with the right stick, adjust each speed, and choose what your buttons do. [Tune your sticks](docs/joystick-controls.md), or reset everything with one click. Closing the window keeps your controller running in the tray.
 
 Your **NVIDIA SHIELD P2570 connects directly to your computer over Wi-Fi**. The controller hardware supports **2.4 GHz and 5 GHz**; your router is not involved in this connection.
 

@@ -75,6 +75,8 @@ pub struct Movement {
     dpad: Vector,
     previous_tick: Option<Instant>,
     remainder: Vector,
+    wheel_remainder: f64,
+    wheel: i32,
 }
 impl Movement {
     pub fn reconfigure(&mut self, previous: Sticks, current: Sticks) {
@@ -89,6 +91,8 @@ impl Movement {
                 self.directions[i] = [false; 4];
                 self.filtered[i] = Vector::default();
                 self.remainder = Vector::default();
+                self.wheel_remainder = 0.0;
+                self.wheel = 0;
             }
         }
     }
@@ -108,7 +112,10 @@ impl Movement {
                 self.blocked[i] = false;
             }
             let value = self.input(i, config);
-            if config.mode == StickMode::Cursor || config.mode == StickMode::None {
+            if matches!(
+                config.mode,
+                StickMode::Cursor | StickMode::Scroll | StickMode::None
+            ) {
                 self.directions[i] = [false; 4];
                 continue;
             }
@@ -131,7 +138,15 @@ impl Movement {
         if self.blocked[index] {
             Vector::default()
         } else {
-            radial(self.raw[index], config.deadzone)
+            let raw = if config.mode == StickMode::Scroll {
+                Vector {
+                    x: 0.0,
+                    y: self.raw[index].y,
+                }
+            } else {
+                self.raw[index]
+            };
+            radial(raw, config.deadzone)
         }
     }
     pub fn keys(&self, settings: Sticks) -> BTreeSet<u16> {
@@ -168,10 +183,12 @@ impl Movement {
                 .as_secs_f64()
         });
         let mut sum = self.dpad;
+        let mut scroll = 0.0;
+        let mut scroll_ceiling: f64 = 0.0;
         let mut ceiling: f64 = if self.dpad.length() > 0.0 { 1.0 } else { 0.0 };
         for (i, config) in settings.as_array().into_iter().enumerate() {
             let input = self.input(i, config);
-            let target = if config.mode == StickMode::Cursor {
+            let target = if matches!(config.mode, StickMode::Cursor | StickMode::Scroll) {
                 shaped(input, config.curve).scale(config.sensitivity)
             } else {
                 Vector::default()
@@ -195,8 +212,22 @@ impl Movement {
                     .scale(1.0 - blend)
                     .plus(target.scale(blend));
             }
-            sum = sum.plus(self.filtered[i]);
+            if config.mode == StickMode::Scroll {
+                scroll -= self.filtered[i].y;
+                scroll_ceiling = scroll_ceiling.max(config.sensitivity);
+            } else {
+                sum = sum.plus(self.filtered[i]);
+            }
         }
+        // Standard 120-unit wheel detents; keep small tilts useful in apps
+        // that do not accumulate partial wheel messages. Eight detents/sec at full tilt.
+        if scroll.abs() < 1e-12 {
+            self.wheel_remainder = 0.0;
+        } else {
+            self.wheel_remainder += scroll.clamp(-scroll_ceiling, scroll_ceiling) * 960.0 * seconds;
+        }
+        self.wheel = (self.wheel_remainder / 120.0).trunc() as i32 * 120;
+        self.wheel_remainder -= f64::from(self.wheel);
         let velocity = sum.cap(ceiling);
         if velocity.length() < 1e-12 {
             self.remainder = Vector::default();
@@ -210,6 +241,9 @@ impl Movement {
             y: travel.y.fract(),
         };
         (travel.x.trunc() as i32, travel.y.trunc() as i32)
+    }
+    pub fn take_wheel(&mut self) -> i32 {
+        std::mem::take(&mut self.wheel)
     }
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -321,7 +355,10 @@ mod tests {
     #[test]
     fn diagonal_multiple_sources_and_opposites_are_bounded() {
         let mut m = Movement::default();
-        let settings = Sticks::default();
+        let settings = Sticks {
+            left: Stick::default(),
+            right: Stick::default(),
+        };
         let start = Instant::now();
         m.report(
             &Pad {
@@ -444,5 +481,81 @@ mod tests {
             m.report(&pad(x, 32767), settings);
             assert_eq!(m.keys(settings).contains(&0x27), held);
         }
+    }
+
+    #[test]
+    fn default_right_stick_scrolls_only_vertically_at_elapsed_time_rate() {
+        for step in [2, 5, 10, 20] {
+            for (y, sign) in [(0, 1), (65535, -1)] {
+                let mut m = Movement::default();
+                let settings = Sticks::default();
+                let start = Instant::now();
+                m.report(
+                    &Pad {
+                        rx: 65535,
+                        ry: y,
+                        ..Pad::default()
+                    },
+                    settings,
+                );
+                m.tick(start, settings, 1000.0);
+                let mut total = 0;
+                for i in 1..=1000 / step {
+                    assert_eq!(
+                        m.tick(start + Duration::from_millis(i * step), settings, 1000.0),
+                        (0, 0)
+                    );
+                    let wheel = m.take_wheel();
+                    assert_eq!(wheel % 120, 0);
+                    total += wheel;
+                }
+                assert!((total - sign * 960).abs() <= 120);
+                m.report(&Pad::default(), settings);
+                m.tick(start + Duration::from_millis(1010), settings, 1000.0);
+                assert_eq!(m.take_wheel(), 0);
+                m.report(
+                    &Pad {
+                        rx: 65535,
+                        ..Pad::default()
+                    },
+                    settings,
+                );
+                m.tick(start + Duration::from_millis(1030), settings, 1000.0);
+                assert_eq!(m.take_wheel(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn scroll_reset_and_mode_change_clear_partial_detents() {
+        let mut m = Movement::default();
+        let settings = Sticks::default();
+        let start = Instant::now();
+        m.report(
+            &Pad {
+                ry: 0,
+                ..Pad::default()
+            },
+            settings,
+        );
+        m.tick(start, settings, 0.0);
+        m.tick(start + Duration::from_millis(100), settings, 0.0);
+        assert_eq!(m.take_wheel(), 0); // Delayed tick is bounded to 30 ms.
+        m.reset();
+        m.tick(start + Duration::from_secs(1), settings, 0.0);
+        assert_eq!(m.take_wheel(), 0);
+        let mut current = settings;
+        current.right.mode = StickMode::Cursor;
+        m.report(
+            &Pad {
+                ry: 0,
+                ..Pad::default()
+            },
+            settings,
+        );
+        m.reconfigure(settings, current);
+        m.tick(start + Duration::from_millis(1020), current, 1000.0);
+        assert_eq!(m.take_wheel(), 0);
+        assert!(!m.active(current));
     }
 }

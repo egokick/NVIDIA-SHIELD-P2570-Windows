@@ -3,7 +3,7 @@
   "sensitivity": 1.0,
   "sticks": {
     "left": { "mode": "cursor", "sensitivity": 1.0, "curve": "precise", "deadzone": 0.2, "smoothing": "off" },
-    "right": { "mode": "cursor", "sensitivity": 1.0, "curve": "precise", "deadzone": 0.2, "smoothing": "off" }
+    "right": { "mode": "scroll", "sensitivity": 1.0, "curve": "precise", "deadzone": 0.2, "smoothing": "off" }
   },
   "bindings": {
     "a": { "kind": "mouse_left" },

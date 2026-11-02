@@ -192,7 +192,7 @@ internal sealed class StickMovementCard : RoundedCard
         Controls.AddRange([title, movement, speedTitle, speedValue, speed, feel, curveTitle, curve, curveHelp, deadzoneTitle, deadzoneValue, deadzone, smoothTitle, smoothing, smoothHelp]);
         movement.AccessibleName = name + " movement"; speed.AccessibleName = name + " cursor speed";
         curve.AccessibleName = name + " response curve"; deadzone.AccessibleName = name + " dead zone"; smoothing.AccessibleName = name + " smoothing";
-        movement.SetItems([new("Cursor", "cursor"), new("Arrow keys", "arrows"), new("W A S D", "wasd"), new("Gamepad only", "none")]);
+        movement.SetItems([new("Cursor", "cursor"), new("Arrow keys", "arrows"), new("W A S D", "wasd"), new("Gamepad only", "none"), new("Scroll up / down", "scroll")]);
         curve.SetItems([new("Precise · recommended", "precise"), new("Linear", "linear"), new("Quick", "quick")]);
         smoothing.SetItems([new("Off · recommended", "off"), new("Light", "light"), new("Steady", "steady")]);
         feel.FlatStyle = FlatStyle.Flat; feel.FlatAppearance.BorderSize = 0; feel.BackColor = Color.White; feel.ForeColor = Palette.Muted;
@@ -213,7 +213,7 @@ internal sealed class StickMovementCard : RoundedCard
         int before = LogicalHeight; updating = true;
         try {
             settings = value with { };
-            movement.SelectedIndex = Array.IndexOf(new[] { "cursor", "arrows", "wasd", "none" }, value.Mode);
+            movement.SelectedIndex = Array.IndexOf(new[] { "cursor", "arrows", "wasd", "none", "scroll" }, value.Mode);
             curve.SelectedIndex = Array.IndexOf(new[] { "precise", "linear", "quick" }, value.Curve);
             smoothing.SelectedIndex = Array.IndexOf(new[] { "off", "light", "steady" }, value.Smoothing);
             speed.Value = (int)Math.Round(value.Sensitivity * 100); deadzone.Value = (int)Math.Round(value.Deadzone * 100);
@@ -227,8 +227,11 @@ internal sealed class StickMovementCard : RoundedCard
         speedValue.Text = $"{speed.Value}%"; deadzoneValue.Text = $"{deadzone.Value}%";
         speed.AccessibleDescription = $"{speed.Value} percent of display-calibrated cursor speed";
         deadzone.AccessibleDescription = $"Ignore movement within {deadzone.Value} percent of the centre";
-        bool cursor = settings.Mode == "cursor";
-        speed.Enabled = cursor; feel.Enabled = settings.Mode != "none"; speedTitle.Text = cursor ? "Cursor speed" : settings.Mode == "none" ? "Desktop movement off" : "Keys follow direction";
+        bool scroll = settings.Mode == "scroll";
+        bool cursor = settings.Mode is "cursor" or "scroll";
+        speed.AccessibleName = title.Text + (scroll ? " scroll speed" : " cursor speed");
+        speed.AccessibleDescription = scroll ? $"{speed.Value} percent scroll speed" : speed.AccessibleDescription;
+        speed.Enabled = cursor; feel.Enabled = settings.Mode != "none"; speedTitle.Text = scroll ? "Scroll speed" : cursor ? "Cursor speed" : settings.Mode == "none" ? "Desktop movement off" : "Keys follow direction";
         speedValue.Visible = speed.Visible = cursor;
         feel.Text = expanded ? "▴  Feel & drift" : "▾  Feel & drift";
         foreach (var control in new Control[] { curveTitle, curve, curveHelp, deadzoneTitle, deadzoneValue, deadzone, smoothTitle, smoothing, smoothHelp }) control.Visible = expanded && settings.Mode != "none";

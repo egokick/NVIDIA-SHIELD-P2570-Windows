@@ -14,7 +14,7 @@ internal static class ControlProfileTests
         Check(defaults.Sensitivity == 1 && defaults.Bindings.Count == 19);
         Check(defaults.Bindings["a"].Kind == "mouse_left" && defaults.Bindings["b"].Kind == "mouse_right");
         Check(defaults.Bindings["left_stick"].Kind == "none" && defaults.Bindings["right_stick"].Kind == "none");
-        Check(defaults.Sticks.Left == new StickSettings() && defaults.Sticks.Right == new StickSettings());
+        Check(defaults.Sticks.Left == new StickSettings() && defaults.Sticks.Right == new StickSettings { Mode = "scroll" });
         using var fixture = Assembly.GetExecutingAssembly().GetManifestResourceStream("default-controls.json") ?? throw new IOException("Controls fixture missing.");
         using var fixtureBytes = new MemoryStream(); fixture.CopyTo(fixtureBytes);
         var contract = ProfileStore.Deserialize(fixtureBytes.ToArray());

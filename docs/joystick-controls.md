@@ -1,8 +1,8 @@
 # Make the sticks feel right
 
-Both sticks move the Windows cursor by default. Tilt a little for a small adjustment, or farther to travel faster. Each stick has its own **Movement** menu and **Speed** slider. Pressing a stick is a separate button mapping.
+The left stick moves the Windows cursor by default. The right stick scrolls up and down like a mouse wheel; push farther to scroll faster. Horizontal tilt does not scroll. Tilt a little for a small adjustment, or farther to travel faster. Each stick has its own **Movement** menu and **Speed** slider. Pressing a stick is a separate button mapping.
 
-Choose **Cursor**, **Arrow keys**, **WASD**, or **Gamepad only** for each stick. Gamepad only stops that stick's desktop action; games still receive its normal controller input. You can also choose **Cursor** for the D-pad directions. Its default remains the keyboard arrow keys.
+Choose **Cursor**, **Scroll up / down**, **Arrow keys**, **WASD**, or **Gamepad only** for each stick. Gamepad only stops that stick's desktop action; games still receive its normal controller input. You can also choose **Cursor** for the D-pad directions. Its default remains the keyboard arrow keys.
 
 Start with **100% speed**, **Precise**, **20% dead zone**, and **Smoothing off**. Open **Feel & drift** to find these options; **Ignore tiny movements** is the dead-zone slider. These are this app's starting defaults, not a measurement of your controller's wear or an optimum established by user testing. The speed baseline uses the display's resolution and physical size, or a size estimate when unavailable. Windows pointer settings also affect the final movement.
 

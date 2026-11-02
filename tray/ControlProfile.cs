@@ -25,7 +25,7 @@ internal sealed record StickSettings
 internal sealed class StickSettingsPair
 {
     [JsonPropertyName("left"), JsonRequired] public StickSettings Left { get; set; } = new();
-    [JsonPropertyName("right"), JsonRequired] public StickSettings Right { get; set; } = new();
+    [JsonPropertyName("right"), JsonRequired] public StickSettings Right { get; set; } = new() { Mode = "scroll" };
     internal StickSettingsPair Copy() => new() { Left = Left with { }, Right = Right with { } };
 }
 
@@ -71,7 +71,7 @@ internal static class ProfileStore
         if (profile.Sticks is null || profile.Sticks.Left is null || profile.Sticks.Right is null)
             throw new InvalidDataException("Both joystick movement settings are required.");
         foreach (var stick in new[] { profile.Sticks.Left, profile.Sticks.Right })
-            if (stick.Mode is not ("cursor" or "arrows" or "wasd" or "none") || stick.Curve is not ("precise" or "linear" or "quick") ||
+            if (stick.Mode is not ("cursor" or "scroll" or "arrows" or "wasd" or "none") || stick.Curve is not ("precise" or "linear" or "quick") ||
                 stick.Smoothing is not ("off" or "light" or "steady") || !double.IsFinite(stick.Sensitivity) || stick.Sensitivity is < 0.25 or > 3 ||
                 !double.IsFinite(stick.Deadzone) || stick.Deadzone is < 0 or > 0.35)
                 throw new InvalidDataException("The joystick movement settings are invalid.");

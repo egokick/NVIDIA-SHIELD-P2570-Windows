@@ -115,6 +115,22 @@ impl Mouse {
         // baseline; resolution and physical size use the shared display model.
         1000.0 * self.cursor_gain / 4.0
     }
+    pub fn wheel(&mut self, delta: i32) -> Result<()> {
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    mouseData: delta as u32,
+                    dwFlags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_WHEEL,
+                    ..Default::default()
+                },
+            },
+        };
+        if unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) } != 1 {
+            anyhow::bail!("mouse_wheel_rejected");
+        }
+        Ok(())
+    }
     pub fn cursor_motion(&mut self, x: i32, y: i32) -> Result<()> {
         self.send(x, y)
     }
