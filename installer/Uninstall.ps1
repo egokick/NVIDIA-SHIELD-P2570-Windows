@@ -7,7 +7,7 @@ $installRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 
 function Assert-NormalPath([string]$Path) {
     $current = [IO.Path]::GetFullPath($Path)
     while ($current) {
-        if ((Test-Path -LiteralPath $current) -and ((Get-Item -LiteralPath $current).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The installation path contains a link. No files were removed.' }
+        if ((Test-Path -LiteralPath $current) -and ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The installation path contains a link. No files were removed.' }
         $current = [IO.Path]::GetDirectoryName($current)
     }
 }

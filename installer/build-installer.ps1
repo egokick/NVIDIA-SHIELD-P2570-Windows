@@ -1,9 +1,10 @@
 [CmdletBinding()]
-param([string]$PackagePath = (Join-Path $PSScriptRoot '..\debug\package'))
+param([string]$PackagePath = '')
 $ErrorActionPreference = 'Stop'
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'test-uninstall-paths.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Uninstaller path checks failed' }
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if (-not $PackagePath) { $PackagePath = Join-Path $repoRoot 'debug\package' }
 $stage = [IO.Path]::GetFullPath($PackagePath)
 $debugRoot = Join-Path $repoRoot 'debug'
 if (-not $stage.StartsWith($debugRoot + '\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Package output must be under debug.' }
@@ -28,7 +29,7 @@ if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($stage,$archive,[IO.Compression.CompressionLevel]::Optimal,$false)
 $out = Join-Path $debugRoot 'installer-publish'
-dotnet publish (Join-Path $PSScriptRoot 'ShieldController.Setup.csproj') -c Release -r win-x64 --self-contained true -o $out "-p:PayloadPath=$archive" "-p:BaseIntermediateOutputPath=$debugRoot\installer-obj\"
+dotnet publish (Join-Path $PSScriptRoot 'ShieldController.Setup.csproj') -c Release -r win-x64 --self-contained true -o $out "-p:PayloadPath=$archive" "-p:BaseIntermediateOutputPath=$debugRoot\installer-obj\" "-p:BaseOutputPath=$debugRoot\installer-bin\"
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
 $setup = Join-Path $release 'NVIDIA-SHIELD-P2570-Windows-Setup-0.1.0.exe'
 Copy-Item -LiteralPath (Join-Path $out 'ShieldControllerSetup.exe') -Destination $setup -Force
