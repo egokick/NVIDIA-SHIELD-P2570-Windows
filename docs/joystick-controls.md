@@ -4,7 +4,7 @@ Both sticks move the Windows cursor by default. Tilt a little for a small adjust
 
 Choose **Cursor**, **Arrow keys**, **WASD**, or **Gamepad only** for each stick. Gamepad only stops that stick's desktop action; games still receive its normal controller input. You can also choose **Cursor** for the D-pad directions. Its default remains the keyboard arrow keys.
 
-Start with **100% speed**, **Precise**, **20% dead zone**, and **Smoothing off**. These are this app's starting defaults, not a measurement of your controller's wear or an optimum established by user testing. The speed baseline uses the display's resolution and physical size, or a size estimate when unavailable. Windows pointer settings also affect the final movement.
+Start with **100% speed**, **Precise**, **20% dead zone**, and **Smoothing off**. Open **Feel & drift** to find these options; **Ignore tiny movements** is the dead-zone slider. These are this app's starting defaults, not a measurement of your controller's wear or an optimum established by user testing. The speed baseline uses the display's resolution and physical size, or a size estimate when unavailable. Windows pointer settings also affect the final movement.
 
 | If this happens | Try this |
 |---|---|
