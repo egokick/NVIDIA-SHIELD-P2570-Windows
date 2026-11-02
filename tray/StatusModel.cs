@@ -26,7 +26,7 @@ internal sealed class StatusModel
     {
         TransportReady = false;
         State = Paired ? ControllerState.PairedDisconnected : ControllerState.NotPaired;
-        Message = message ?? (Paired ? "Ready to connect. Tap the NVIDIA logo once to wake the controller." : "Pair your controller to get started.");
+        Message = message ?? (Paired ? "Your pairing is saved. Choose Connect to use your controller." : "Pair your controller to get started.");
     }
     internal void ApplySession(JsonElement value)
     {
@@ -36,7 +36,7 @@ internal sealed class StatusModel
         if (!Paired) return;
         State = connected ? ControllerState.Connected : ControllerState.PairedDisconnected;
         Message = connected ? "Wireless gamepad input is active. Open your game and play."
-            : TransportReady ? "Listening for your controller. Tap the NVIDIA logo once, then move a stick."
+            : TransportReady ? "Move either joystick left and right to finish connecting."
             : "Starting the wireless connection…";
     }
     internal void Fail(string message) { State = ControllerState.Error; TransportReady = false; Message = message; }

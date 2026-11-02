@@ -3,7 +3,7 @@ using System.Drawing.Text;
 
 namespace ShieldController;
 
-internal enum IllustrationMode { Pair, Searching, Wake, Connected, Error, Location }
+internal enum IllustrationMode { Pair, Searching, MoveStick, Connected, Error, Location }
 
 /// <summary>An original drawing of the P2570, with the touch target in its real position.</summary>
 internal sealed class ControllerIllustration : Control
@@ -22,7 +22,7 @@ internal sealed class ControllerIllustration : Control
             AccessibleDescription = value switch
             {
                 IllustrationMode.Connected => "Your controller is connected.",
-                IllustrationMode.Wake => "Touch the green NVIDIA triangle at the top centre of your controller once to wake it.",
+                IllustrationMode.MoveStick => "Tilt either joystick left and right. The app connects automatically when controller input arrives.",
                 IllustrationMode.Searching => "Leave the NVIDIA triangle flashing while the app connects your controller.",
                 IllustrationMode.Location => "The touch-sensitive NVIDIA logo is the green triangle at the top centre of your controller. It does not click.",
                 IllustrationMode.Error => "NVIDIA SHIELD P2570 controller.",
@@ -78,6 +78,15 @@ internal sealed class ControllerIllustration : Control
         DrawDpad(g, 110, 110);
         DrawStick(g, 155, 159);
         DrawStick(g, 245, 159);
+        if (Mode == IllustrationMode.MoveStick)
+        {
+            using var halo = new SolidBrush(Color.FromArgb(70, Accent));
+            using var ring = new Pen(Accent, 3);
+            g.FillEllipse(halo, 121, 125, 68, 68);
+            g.DrawEllipse(ring, 124, 128, 62, 62);
+            using var arrow = new Pen(Accent, 4) { StartCap = LineCap.ArrowAnchor, EndCap = LineCap.ArrowAnchor };
+            g.DrawLine(arrow, 112, 159, 198, 159);
+        }
         DrawFaceButton(g, 289, 92, "Y");
         DrawFaceButton(g, 272, 110, "X");
         DrawFaceButton(g, 306, 110, "B");
@@ -103,7 +112,7 @@ internal sealed class ControllerIllustration : Control
             g.DrawLine(volume, 230, 202, 230, 208);
         }
 
-        if (Mode is IllustrationMode.Pair or IllustrationMode.Wake or IllustrationMode.Location)
+        if (Mode is IllustrationMode.Pair or IllustrationMode.Location)
         {
             using var halo = new SolidBrush(Color.FromArgb(43, Accent));
             g.FillEllipse(halo, 178, 64, 44, 43);
@@ -127,7 +136,7 @@ internal sealed class ControllerIllustration : Control
         {
             IllustrationMode.Connected => "",
             IllustrationMode.Searching => "Keep it flashing",
-            IllustrationMode.Wake => "Tap once",
+            IllustrationMode.MoveStick => "Move a stick",
             IllustrationMode.Location => "Touch here",
             _ => "Hold 3 sec"
         };
@@ -136,9 +145,11 @@ internal sealed class ControllerIllustration : Control
         if (!connected)
         {
             using (var line = new Pen(Color.FromArgb(114, 150, 64), 2) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                g.DrawLine(line, 200, 48, 200, 66);
+                if (Mode == IllustrationMode.MoveStick) g.DrawLine(line, 200, 48, 155, 121);
+                else g.DrawLine(line, 200, 48, 200, 66);
             using (var pointer = new SolidBrush(Color.FromArgb(114, 150, 64)))
-                g.FillPolygon(pointer, new Point[] {new(196, 62), new(204, 62), new(200, 69)});
+                if (Mode == IllustrationMode.MoveStick) g.FillPolygon(pointer, new Point[] {new(152, 115), new(161, 120), new(153, 126)});
+                else g.FillPolygon(pointer, new Point[] {new(196, 62), new(204, 62), new(200, 69)});
         }
         using var bubble = RoundedRectangle(bounds, 18);
         using (var fill = new SolidBrush(connected ? Accent : Color.FromArgb(233, 242, 218)))

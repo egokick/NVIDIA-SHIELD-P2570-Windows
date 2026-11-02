@@ -61,7 +61,7 @@ Controller headset audio, microphone and vibration are not implemented. ViGEmBus
 |---|---|
 | Let's connect | Touch and hold the logo until it flashes, then click **It's flashing**. |
 | Finding / Pairing | Keep the logo flashing while the app finishes setup. |
-| Not connected yet | Pairing is saved and the PC is listening. Tap the logo once, then move a stick. |
+| Move a joystick | Pairing is complete. Tilt either stick left and right; the app connects automatically when input arrives. |
 | Connected | The controller is sending actual wireless gamepad reports to Windows. |
 | Disconnected | Pairing is saved, but the connection is stopped. Click **Connect**. |
 | One quick setup / A quick fix first | Follow the instruction and use the large button. More detail is in **Settings**. |

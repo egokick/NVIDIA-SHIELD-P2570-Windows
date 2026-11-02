@@ -26,7 +26,7 @@ internal sealed class MainForm : Form
     private readonly Panel homeContent = new();
     private readonly ControlMappingsPanel controlMappings;
     private Size setupClientSize = new(520, 650);
-    private bool connectedLayout;
+    private bool connectedLayout, waitingForMovement;
     private bool calibrationPending;
     private string? calibrationMonitor;
     private bool checkWhenActivated;
@@ -165,6 +165,7 @@ internal sealed class MainForm : Form
         page.Padding = new Padding(S(connectedLayout ? 24 : 32), S(20), S(connectedLayout ? 24 : 32), S(16));
         foreach (var item in new[] { (0, compact ? 36 : 48), (1, compact ? 24 : 32), (2, compact ? 44 : 50), (3, 54), (6, compact ? 54 : 58), (7, compact ? 28 : 32), (8, compact ? 34 : 40) })
             page.RowStyles[item.Item1].Height = S(item.Item2);
+        if (waitingForMovement) page.RowStyles[6].Height = 0;
         headline.Font = page.Width < S(470) ? compactTitleFont : titleFont;
     }
     private void SetConnectedLayout(bool connected)
@@ -279,9 +280,12 @@ internal sealed class MainForm : Form
     private void ApplyState()
     {
         bool locked = busy || owner.CommandPending || exiting;
+        waitingForMovement = !locked && Ready && model.State == ControllerState.PairedDisconnected && Running && model.TransportReady;
+        primary.Visible = !waitingForMovement;
+        AcceptButton = waitingForMovement ? null : primary;
         band.Enabled = !locked;
-        badge.Text = model.State == ControllerState.Connected ? "●  CONNECTED WIRELESSLY" : model.Paired ? (Running && !model.TransportReady ? "●  CONNECTING" : "○  DISCONNECTED · PAIRING SAVED") : "○  FIRST SETUP";
-        badge.ForeColor = model.State == ControllerState.Connected ? Color.FromArgb(49, 111, 29) : Palette.Muted;
+        badge.Text = model.State == ControllerState.Connected ? "●  CONNECTED WIRELESSLY" : waitingForMovement ? "✓  PAIRED · ONE LAST STEP" : model.Paired ? (Running && !model.TransportReady ? "●  CONNECTING" : "○  DISCONNECTED · PAIRING SAVED") : "○  FIRST SETUP";
+        badge.ForeColor = model.State == ControllerState.Connected || waitingForMovement ? Color.FromArgb(49, 111, 29) : Palette.Muted;
         if (tray is not null) tray.Text = "SHIELD · " + StatusModel.Title(model.State);
         bool multiple = candidates.Items.Count > 1 && !model.Paired && !locked;
         candidates.Visible = multiple; page.RowStyles[5].Height = multiple ? 48 * DeviceDpi / 96f : 0;
@@ -317,7 +321,7 @@ internal sealed class MainForm : Form
             Present(title, text, action, next, IllustrationMode.Error, missing.Id == "npcap" ? "Npcap · a Windows approval may appear" : missing.Id == "vigem" ? "ViGEmBus · a Windows approval may appear" : "");
         }
         else if (capabilities is null)
-            Present("Checking your PC…", "This will only take a moment.", "Please wait…", NextAction.None, IllustrationMode.Wake);
+            Present("Checking your PC…", "This will only take a moment.", "Please wait…", NextAction.None, IllustrationMode.Error);
         else if (!model.Paired && wifi.SelectedItem is not AdapterChoice)
             Present("Choose Wi-Fi.", "Choose your PC's controller Wi-Fi adapter\nin Settings.", "Choose Wi-Fi", NextAction.Settings, IllustrationMode.Error);
         else if (!model.Paired && multiple)
@@ -328,9 +332,9 @@ internal sealed class MainForm : Form
         else if (model.State == ControllerState.Connected)
             Present("Connected", "Open your game.\nYour controller is connected wirelessly.", "Hide to tray", NextAction.Hide, IllustrationMode.Connected, "Closing this window keeps your controller connected.");
         else if (Running)
-            Present(model.TransportReady ? "Not connected yet" : "Connecting…", model.TransportReady ? "Tap the green logo once.\nThen move a stick." : "Getting your wireless connection ready.", "Hide to tray", NextAction.Hide, IllustrationMode.Wake, "Pairing saved · waiting for controller input");
+            Present(model.TransportReady ? "Move a joystick" : "Connecting…", model.TransportReady ? "Tilt either stick left and right.\nWe'll connect automatically." : "Getting your wireless connection ready.", "Hide to tray", NextAction.Hide, model.TransportReady ? IllustrationMode.MoveStick : IllustrationMode.Error, model.TransportReady ? "Waiting for joystick movement…" : "Your pairing is saved.");
         else
-            Present("Disconnected", "Your pairing is saved.\nConnect, then tap the green logo once.", "Connect", NextAction.Connect, IllustrationMode.Wake, "Your pairing is saved on this PC.");
+            Present("Disconnected", "Your pairing is saved.\nChoose Connect to use your controller.", "Connect", NextAction.Connect, IllustrationMode.Error, "Your pairing is saved on this PC.");
         primary.Enabled = !locked && nextAction != NextAction.None && (!multiple || candidates.SelectedItem is Candidate);
         if (nextAction is NextAction.InstallDrivers or NextAction.Pair or NextAction.Recover) primary.Enabled &= !Running;
         trayConnect.Text = disconnect.Text = Running ? "Disconnect" : "Connect";
@@ -343,6 +347,7 @@ internal sealed class MainForm : Form
         detail.Text = capabilities?.Requirements.FirstOrDefault(r => !r.Available)?.Label
             ?? (model.Paired ? "To change adapters, disconnect and forget this controller first." : "Wi-Fi carries controller input. Bluetooth isn't used.");
         SetConnectedLayout(model.State == ControllerState.Connected && !exiting);
+        LayoutHome();
     }
     private async Task PrimaryClick()
     {
@@ -556,7 +561,7 @@ internal sealed class MainForm : Form
         if (scene == PreviewScene.ConnectedMappingsCustom)
             controlMappings.MappingRows.Single(row => row.Id == "y").RenderChoicesPreview(Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + "-actions.png"));
         File.WriteAllText(Path.ChangeExtension(path, ".json"), JsonSerializer.Serialize(new { scene = scene.ToString(), state = model.State.ToString(), capture = "WinForms DrawToBitmap of production controls", visible = Visible, show_in_taskbar = ShowInTaskbar,
-            owner_or_radio_calls = 0, dimensions = new { width = bitmap.Width, height = bitmap.Height }, heading = headline.Text, primary_action = primary.Text, primary_enabled = primary.Enabled,
+            owner_or_radio_calls = 0, dimensions = new { width = bitmap.Width, height = bitmap.Height }, heading = headline.Text, instruction = instruction.Text, badge = badge.Text, illustration = illustration.Mode.ToString(), waiting_for_movement = waitingForMovement, primary_action = primary.Text, primary_enabled = primary.Enabled, primary_hidden_for_movement = waitingForMovement,
             candidate_selection_visible = candidates.Visible, candidate_selected = candidates.SelectedItem is not null, settings_visible = scene == PreviewScene.Settings,
             controls_panel_visible = connectedLayout, mapping_rows = connectedLayout ? ProfileStore.ControlIds.Length : 0,
             controls_capture = controlsPath is not null,
