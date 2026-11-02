@@ -322,7 +322,7 @@ fn data_loop(
             if last_verify.elapsed() >= Duration::from_secs(1) {
                 ensure!(owner.alive(), Code::OwnerExited);
                 platform::verify_adapter(r)?;
-                log.event("observing",json!({"received_frames":frames,"pad_reports":pad_reports,"trackpad_reports_reports":trackpad_reports,"xinput_slot":output.slot}))?;
+                log.event("observing",json!({"received_frames":frames,"pad_reports":pad_reports,"trackpad_reports":trackpad_reports,"xinput_slot":output.slot}))?;
                 last_verify = now;
             }
             match in_rx.recv_timeout(Duration::from_millis(10)) {
