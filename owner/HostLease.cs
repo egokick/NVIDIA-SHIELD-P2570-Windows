@@ -22,6 +22,7 @@ internal static partial class Program
         public ulong PadReports { get; set; }
         public bool ExpectedControllerSession { get; set; }
         public int? XinputSlot { get; set; }
+        public string? FirmwareVersion { get; set; }
         public int Heartbeats { get; set; }
         public bool ExpectedControllerListedClient { get; set; }
         public uint MaximumListedClients { get; set; }
@@ -49,7 +50,8 @@ internal static partial class Program
     }
     private static byte[] GroupMac(Guid id)
     {
-        var nic = NetworkInterface.GetAllNetworkInterfaces().Single(n => Guid.TryParse(n.Id, out var parsed) && parsed == id && ChannelInspection.IsBaseGroup(n.Description));
+        if (!ChannelInspection.IsGroupOwner(id)) throw new InvalidOperationException("Selected interface is not a Wi-Fi Direct group owner.");
+        var nic = NetworkInterface.GetAllNetworkInterfaces().Single(n => Guid.TryParse(n.Id, out var parsed) && parsed == id);
         var mac = nic.GetPhysicalAddress().GetAddressBytes();
         if (nic.OperationalStatus != OperationalStatus.Up || mac.Length != 6 || mac.All(b => b == 0) || (mac[0] & 1) != 0)
             throw new InvalidOperationException("GO MAC unavailable or invalid.");
@@ -79,6 +81,8 @@ internal static partial class Program
         return normalized;
     }
     private sealed record Association(uint Clients, int? ListedClients, bool? Expected, string? ErrorType, int? Hresult);
+    internal static bool ExpectedHostCompletion(bool stopRequested, int? exitCode, bool stopped, bool padRemoved, bool threadsJoined) =>
+        stopRequested && exitCode == 0 && stopped && padRemoved && threadsJoined;
     private static Association ReadAssociation(NetworkOperatorTetheringManager manager, string expected)
     {
         uint count = manager.ClientCount;
@@ -111,12 +115,18 @@ internal static partial class Program
             StandardInputEncoding = new UTF8Encoding(false), WorkingDirectory = Path.GetDirectoryName(ChildPath)!,
         };
         foreach (string arg in new[] { "--run", "--owner-receipt", context, "--output", childOutput }) start.ArgumentList.Add(arg);
-        Log("data-host-launching", new { continuous_while_owner_and_launcher_alive = true, exact_group_verified = true, private_owner_context = true, heartbeat_interval_ms = 1000, configuration_pin_verified = true }, required: true);
+        Log("data-host-launching", new { continuous_while_owner_and_launcher_alive = true, exact_group_verified = true, private_owner_context = true,
+            heartbeat_interval_ms = OwnerHeartbeatLease.IntervalMilliseconds, validation_lease_ms = OwnerHeartbeatLease.ValidationMilliseconds, configuration_pin_verified = true }, required: true);
         checkpoint = result.LastCheckpoint = "data-host-launch";
         using var child = Process.Start(start) ?? throw new InvalidOperationException("Data host failed to start.");
         result.Started = true;
         Task stdout = Task.CompletedTask; Task<string> stderr = Task.FromResult("");
         var lifetime = Stopwatch.StartNew();
+        using var stopHeartbeat = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        var heartbeatLease = new OwnerHeartbeatLease(lifetime.ElapsedMilliseconds);
+        // Start immediately; even the recovery write must not consume the child's
+        // three-second initial heartbeat budget.
+        Task heartbeat = Task.Run(() => KeepChildAlive(child, result, heartbeatLease, lifetime, stopHeartbeat));
         Task<Association>? association = null; double nextAssociation = 0;
         Association? previousAssociation = null;
         try
@@ -126,7 +136,9 @@ internal static partial class Program
             recovery.ChildPid = child.Id; recovery.ChildCreation = LauncherLifetime.Creation(child); recovery.Save();
             while (!child.HasExited)
             {
-                cancellation.ThrowIfCancellationRequested(); var beat = Stopwatch.StartNew();
+                cancellation.ThrowIfCancellationRequested();
+                if (heartbeat.IsCompleted) await heartbeat;
+                if (stopHeartbeat.IsCancellationRequested) break;
                 if (stdout.IsFaulted) await stdout;
                 if (ShouldStop)
                 {
@@ -155,32 +167,41 @@ internal static partial class Program
                     association = Task.Run(() => ReadAssociation(prepared.Manager, expectedMac));
                     nextAssociation = lifetime.Elapsed.TotalSeconds + 5;
                 }
-                checkpoint = result.LastCheckpoint = "verify-hotspot-on";
-                var state = prepared.Manager.TetheringOperationalState;
-                result.LastHotspotState = state.ToString();
-                if (state != TetheringOperationalState.On) throw new InvalidOperationException("Owned hotspot no longer On.");
-                checkpoint = result.LastCheckpoint = "verify-active-go";
-                if (!ChannelInspection.ActiveGroups().SequenceEqual(new[] { groupId })) throw new InvalidOperationException("Owned GO changed.");
-                checkpoint = result.LastCheckpoint = "verify-go-mac";
-                if (!GroupMac(groupId).SequenceEqual(mac)) throw new InvalidOperationException("Owned GO MAC changed.");
-                checkpoint = result.LastCheckpoint = "verify-uplink";
-                if (UplinkState() != prepared.UplinkAddressState) throw new InvalidOperationException("Uplink changed.");
-                checkpoint = result.LastCheckpoint = "verify-go-channel";
-                int currentChannel = await Task.Run(() => ChannelInspection.Read(groupId)).WaitAsync(TimeSpan.FromMilliseconds(700), cancellation);
-                if (currentChannel != channel) throw new InvalidOperationException("Owned hotspot channel changed.");
-                try
-                {
-                    checkpoint = result.LastCheckpoint = "send-child-heartbeat";
-                    await child.StandardInput.WriteAsync("alive\n").WaitAsync(TimeSpan.FromMilliseconds(500), cancellation);
-                    await child.StandardInput.FlushAsync().WaitAsync(TimeSpan.FromMilliseconds(500), cancellation);
-                    result.Heartbeats++;
-                }
-                catch (IOException) when (child.HasExited) { break; }
-                await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(1, 1000 - beat.Elapsed.TotalMilliseconds)), cancellation);
+                checkpoint = result.LastCheckpoint = "verify-owned-network";
+                heartbeatLease.BeginValidation(lifetime.ElapsedMilliseconds);
+                // Only one complete validator is in flight. A stalled native call
+                // cannot renew the lease or cause a stream of replacement tasks.
+                Task<string> validation = Task.Run(() => {
+                    try
+                    {
+                        string state = ValidateOwnedHost(prepared, groupId, mac, channel, stopHeartbeat.Token);
+                        heartbeatLease.CompleteValidation(lifetime.ElapsedMilliseconds);
+                        return state;
+                    }
+                    catch { heartbeatLease.Revoke(); throw; }
+                });
+                // Native queries cannot always be cancelled. Observe a late fault
+                // without allowing the completed task to renew a revoked lease.
+                _ = validation.ContinueWith(failed => _ = failed.Exception, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                try { result.LastHotspotState = await validation.WaitAsync(TimeSpan.FromMilliseconds(OwnerHeartbeatLease.ValidationMilliseconds), stopHeartbeat.Token); }
+                catch (HostValidationException error) { checkpoint = result.LastCheckpoint = error.Stage; throw; }
+                await Task.Delay(OwnerHeartbeatLease.IntervalMilliseconds, stopHeartbeat.Token);
             }
+        }
+        catch (OperationCanceledException) when (result.StopRequested || cancellation.IsCancellationRequested)
+        { result.StopRequested = true; }
+        catch (OperationCanceledException)
+        {
+            checkpoint = result.LastCheckpoint = "owner-validation-lease";
+            if (heartbeat.IsCompleted) await heartbeat;
+            throw new InvalidOperationException("Data host heartbeat ended without a requested stop.");
         }
         finally
         {
+            heartbeatLease.Revoke(); stopHeartbeat.Cancel();
+            try { await heartbeat.WaitAsync(TimeSpan.FromSeconds(2)); }
+            catch (Exception error) { Log("owner-heartbeat-stopped", new { type = error.GetType().Name, validation_lease_ms = OwnerHeartbeatLease.ValidationMilliseconds }); }
             // Close heartbeat and stop/await only this owned child before its AP stops.
             try { child.StandardInput.Close(); } catch { }
             try
@@ -203,7 +224,12 @@ internal static partial class Program
             catch (Exception error) { logFailures++; Log("data-host-evidence-error", new { type = error.GetType().Name }); }
         }
         checkpoint = result.LastCheckpoint = "verify-child-completion";
-        if (result.ExitCode != 0 || !result.Stopped || !result.VirtualPadRemoved || !result.TransportThreadsJoined)
+        if (!result.StopRequested)
+        {
+            checkpoint = result.LastCheckpoint = "data-host-unexpected-exit";
+            throw new InvalidOperationException("Data host exited without an explicit stop or launcher exit.");
+        }
+        if (!ExpectedHostCompletion(result.StopRequested, result.ExitCode, result.Stopped, result.VirtualPadRemoved, result.TransportThreadsJoined))
             throw new InvalidOperationException("Data host did not complete and release normally.");
     }
     private static async Task PumpChild(StreamReader reader, HostResult result)
@@ -215,8 +241,9 @@ internal static partial class Program
             string? stage = row.GetProperty("stage").GetString(); var detail = row.GetProperty("detail");
             BoundedHistory.Append(Path.Combine(output!, "data-host-stdout.jsonl"), line);
             if (stage == "transport-ready") { result.TransportReady = true; Log("transport-ready", new { gamepad_only = true }); }
-            if (stage == "data-host-released") { result.VirtualPadRemoved = detail.GetProperty("virtual_pad_removed").GetBoolean(); result.TransportThreadsJoined = detail.GetProperty("transport_threads_joined").GetBoolean(); result.XinputSlot = null; }
+            if (stage == "data-host-released") { result.VirtualPadRemoved = detail.GetProperty("virtual_pad_removed").GetBoolean(); result.TransportThreadsJoined = detail.GetProperty("transport_threads_joined").GetBoolean(); result.TransportReady = false; }
             string? readiness = ApplyReadiness(stage, stage == "xinput-ready" ? detail.GetProperty("slot").GetInt32() : null, result);
+            if (stage == "controller-firmware" && ApplyFirmware(detail, result)) Log("controller-firmware", new { });
             if (readiness is not null) Log(readiness, new { xinput_slot = result.XinputSlot, reason = stage });
             if (detail.TryGetProperty("pad_reports", out var reports)) result.PadReports = Math.Max(result.PadReports, reports.GetUInt64());
             if (stage == "finished" && detail.TryGetProperty("error_code", out var code) && code.ValueKind != JsonValueKind.Null)
@@ -227,18 +254,37 @@ internal static partial class Program
             }
         }
     }
+    private static bool ApplyFirmware(JsonElement detail, HostResult result)
+    {
+        if (!result.ExpectedControllerSession || !detail.TryGetProperty("version", out var version) ||
+            version.ValueKind != JsonValueKind.String || !ControllerFirmware.IsValid(version.GetString())) return false;
+        result.FirmwareVersion = version.GetString(); return true;
+    }
     private static string? ApplyReadiness(string? stage, int? slot, HostResult result)
     {
+        if (stage == "expected-controller-resumed")
+        {
+            bool wasDetected = result.ExpectedControllerSession;
+            result.ExpectedControllerSession = true;
+            return wasDetected ? null : "controller-detected";
+        }
         if (stage == "xinput-ready")
         {
             if (slot is null or < 0 or > 3) throw new InvalidDataException("Invalid XInput readiness slot.");
             result.XinputSlot = slot; return "connected";
         }
-        if (stage is "expected-controller-session" or "stale-input-released" or "controller-session-released")
+        if (stage is "expected-controller-session" or "stale-input-released" or "controller-session-released" or "data-host-released")
         {
             bool wasConnected = result.XinputSlot is not null; result.XinputSlot = null;
+            bool wasDetected = result.ExpectedControllerSession;
+            if (stage != "stale-input-released") result.FirmwareVersion = null;
             if (stage == "expected-controller-session") result.ExpectedControllerSession = true;
-            return wasConnected ? "disconnected" : null;
+            if (stage is "controller-session-released" or "data-host-released") result.ExpectedControllerSession = false;
+            // Report session arrival/loss even before the first gamepad input report.
+            // Receiver readiness by itself does not mean the controller was detected.
+            return wasConnected ? "disconnected"
+                : stage == "expected-controller-session" ? "controller-detected"
+                : wasDetected && !result.ExpectedControllerSession ? "controller-lost" : null;
         }
         return null;
     }

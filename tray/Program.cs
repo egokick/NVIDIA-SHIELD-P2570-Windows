@@ -120,6 +120,8 @@ internal static class SelfTests
         checks += PairingFlowTests.Run();
         checks += ControlProfileTests.Run();
         checks += ControlMappingsTests.Run();
+        checks += FirmwareTests.Run();
+        checks += StatusModelTests.Run();
         void Check(bool success) { checks++; if (!success) throw new InvalidOperationException("UI state check failed."); }
         Capabilities Paired(bool yes) => new(yes, false, [], [], [], null, null);
         var m = new StatusModel(); Check(m.State == ControllerState.NotPaired);
@@ -144,6 +146,39 @@ internal static class SelfTests
         catch (InvalidDataException) { rejected = true; }
         Check(rejected && failures == 1 && callbackFails.ReadLine() is null);
         Check(MainForm.RequirementSummary(new(false, false, [new("npcap", new string('x', 1000), false)], [], [], null, null)) == "Needs setup: Npcap");
+        using var setupError = JsonDocument.Parse("{\"phase\":\"setup-error\",\"detail\":{\"checkpoint\":\"pairing-bootstrap-channel\",\"message\":\"private native data\"}}");
+        Check(OwnerClient.ExplainBandFailure([setupError.RootElement]) is null && OwnerClient.ExplainFailure([setupError.RootElement]).Contains("temporary pairing network"));
+        Check(!OwnerClient.ExplainFailure([setupError.RootElement]).Contains("private native data"));
+        using var pairingNetworkError = JsonDocument.Parse("{\"phase\":\"setup-error\",\"detail\":{\"checkpoint\":\"pairing-network-unavailable\",\"observed_channel\":11}}");
+        Check(OwnerClient.ExplainBandFailure([pairingNetworkError.RootElement]) is null && OwnerClient.ExplainFailure([pairingNetworkError.RootElement]).Contains("Pairing can use 2.4 or 5 GHz"));
+        Check(OwnerClient.ExplainFailure([]).Contains("green logo"));
+        using var bandError = JsonDocument.Parse("{\"phase\":\"setup-error\",\"detail\":{\"checkpoint\":\"five-ghz-required\"}}");
+        Check(OwnerClient.ExplainFailure([bandError.RootElement]) == ConnectionSettings.DescribeFiveGhzFailure(null, pairing: false).Message);
+        using var fiveSupported = JsonDocument.Parse("{\"phase\":\"validated\",\"detail\":{\"supports_5ghz\":true}}");
+        foreach (var (reason, channel, expected) in new[] {
+            ("observed-2.4-ghz", "11", "Windows created the controller network on 2.4 GHz (channel 11)"),
+            ("unsupported-5-ghz-channel", "64", "5 GHz channel 64, which this app does not support"),
+            ("no-group", "null", "did not expose a controller network"),
+            ("ambiguous-groups", "null", "multiple controller networks"),
+            ("channel-query-timeout", "null", "did not answer the channel check in time"),
+            ("channel-unavailable", "null", "could not read and verify"),
+            ("unsupported-hardware", "null", "Windows reports that this adapter cannot create") })
+        {
+            using var reasonError = JsonDocument.Parse("{\"phase\":\"setup-error\",\"detail\":{\"checkpoint\":\"five-ghz-required\",\"band_failure_reason\":\"" + reason + "\",\"observed_channel\":" + channel + ",\"message\":\"private native data\"}}");
+            var text = OwnerClient.ExplainBandFailure([reasonError.RootElement]);
+            Check(text is not null && text.Message.Contains(expected) && !text.Message.Contains("private native data"));
+            Check(text!.Heading == (reason == "unsupported-hardware" ? "5 GHz required" : "5 GHz connection unavailable"));
+            Check(!text.Message.Contains("Your adapter supports 5 GHz"));
+            if (reason == "observed-2.4-ghz")
+                Check(OwnerClient.ExplainFailure([fiveSupported.RootElement, reasonError.RootElement]).Contains("Your adapter supports 5 GHz"));
+        }
+        foreach (string channel in new[] { "\"private native data\"", "2147483648", "-500", "36", "null" })
+        {
+            using var malformedChannel = JsonDocument.Parse("{\"phase\":\"setup-error\",\"detail\":{\"checkpoint\":\"five-ghz-required\",\"band_failure_reason\":\"unsupported-5-ghz-channel\",\"observed_channel\":" + channel + "}}");
+            Check(OwnerClient.ExplainFailure([malformedChannel.RootElement]) == ConnectionSettings.DescribeFiveGhzFailure("unsupported-5-ghz-channel", pairing: false).Message);
+        }
+        using var unrelatedChannelError = JsonDocument.Parse("{\"phase\":\"failed\",\"detail\":{\"checkpoint\":\"verify-channel\"}}");
+        Check(OwnerClient.ExplainBandFailure([unrelatedChannelError.RootElement]) is null);
         using (var form = new MainForm(preview: true))
         using (var cancellation = new CancellationTokenSource())
         {

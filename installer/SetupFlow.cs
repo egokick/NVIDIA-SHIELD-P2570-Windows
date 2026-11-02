@@ -21,7 +21,7 @@ internal sealed record SetupRequirements(IReadOnlyDictionary<string, bool> Items
         foreach (var entry in value.GetProperty("requirements").EnumerateArray())
             if (!result.TryAdd(entry.GetProperty("id").GetString()!, entry.GetProperty("available").GetBoolean()))
                 throw new InvalidDataException("The setup check returned duplicate requirements.");
-        foreach (string id in new[] { "architecture", "windows", "npcap", "vigem", "package", "location", "wifi", "pairing-radio", "uplink" })
+        foreach (string id in new[] { "architecture", "windows", "npcap", "vigem", "package" })
             if (!result.ContainsKey(id)) throw new InvalidDataException("The setup check is incomplete. Run the latest SHIELD Setup again.");
         return new(result, value.GetProperty("recovery_required").GetBoolean());
     }
@@ -31,10 +31,6 @@ internal sealed record SetupRequirements(IReadOnlyDictionary<string, bool> Items
         if (!DriverReady("windows")) return new(SetupStage.Attention, "A newer Windows is needed", "Update to Windows 11 24H2 or later, then run Setup again.", 100, "ms-settings:windowsupdate");
         if (!DriverReady("package")) return new(SetupStage.Error, "Let's repair the app", "Some app files could not be checked. Click Try again to replace them.");
         if (RecoveryRequired) return new(SetupStage.Attention, "Finish the previous connection", "Open SHIELD Controller and use Recover. Then run Setup again.", 100);
-        if (!DriverReady("location")) return new(SetupStage.Attention, "Allow Wi-Fi access", "In Windows Settings, turn on Location services and let desktop apps access your location. Then come back and click Check again.", 100, "ms-settings:privacy-location");
-        if (!DriverReady("wifi")) return new(SetupStage.Attention, "Turn on your PC's Wi-Fi", "Your app is installed. Turn on Wi-Fi in Windows Settings, then come back and click Check again.", 100, "ms-settings:network-wifi");
-        if (!DriverReady("pairing-radio")) return new(SetupStage.Attention, "Choose one Wi-Fi adapter", "Your app is installed. Keep one Wi-Fi adapter enabled for pairing, then click Check again.", 100, "ms-settings:network-advancedsettings");
-        if (!DriverReady("uplink")) return new(SetupStage.Attention, "Connect your PC to the internet", "Your app is installed. Connect Ethernet or Wi-Fi, then come back and click Check again.", 100, "ms-settings:network-status");
         return null;
     }
 }
@@ -103,7 +99,7 @@ internal sealed class NativeSetupOperations : ISetupOperations
     {
         string executable = Path.Combine(Program.InstallationRoot, "bin", "owner", "ShieldControllerOwner.exe");
         using var process = Process.Start(new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardOutput = true, RedirectStandardError = true, ArgumentList = { "--mode", "capabilities" } }) ?? throw new IOException("The app check could not start. Click Try again.");
+            RedirectStandardOutput = true, RedirectStandardError = true, ArgumentList = { "--mode", "installation-check" } }) ?? throw new IOException("The app check could not start. Click Try again.");
         var output = process.StandardOutput.ReadToEndAsync(); var errors = process.StandardError.ReadToEndAsync();
         try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45)); }
         catch (TimeoutException) { if (!process.HasExited) process.Kill(); throw; } // Read-only capability process, never the wireless owner.
@@ -173,23 +169,25 @@ internal static class SetupFlowTests
         Check(new SetupFlow(rejected).Run(_ => { }).GetAwaiter().GetResult().Stage == SetupStage.Error);
         var nativeFailure = new Fake { Before = State(), After = State(), NativeReady = false };
         Check(new SetupFlow(nativeFailure).Run(_ => { }).GetAwaiter().GetResult().Stage == SetupStage.Error);
-        foreach (var (id, uri) in new[] { ("location", "ms-settings:privacy-location"), ("wifi", "ms-settings:network-wifi"), ("pairing-radio", "ms-settings:network-advancedsettings"), ("uplink", "ms-settings:network-status") }) {
+        foreach (string id in new[] { "location", "wifi", "pairing-radio", "uplink" }) {
             var ops = new Fake { Before = State(), After = State(missing: id) }; var flow = new SetupFlow(ops); var result = flow.Run(_ => { }).GetAwaiter().GetResult();
-            Check(result.Stage == SetupStage.Attention && result.SettingsUri == uri && flow.AppInstalled);
+            Check(result.Stage == SetupStage.Ready && result.SettingsUri is null && flow.AppInstalled);
         }
         var denied = State(missing: "location"); ((Dictionary<string,bool>)denied.Items)["wifi"] = false;
-        Check(denied.Attention()!.SettingsUri == "ms-settings:privacy-location");
+        Check(denied.Attention() is null);
         var cancelled = new Fake { Before = State(false), After = State(), Failure = new System.ComponentModel.Win32Exception(1223) };
         Check(new SetupFlow(cancelled).Run(_ => { }).GetAwaiter().GetResult().Message.Contains("cancelled"));
         bool invalid = false; try { SetupRequirements.Parse("{\"phase\":\"capabilities\",\"detail\":{\"requirements\":[],\"recovery_required\":false}}"); } catch (InvalidDataException) { invalid = true; } Check(invalid);
         string SerializeState(IEnumerable<KeyValuePair<string,bool>> items) => JsonSerializer.Serialize(new { phase = "capabilities", detail = new { requirements = items.Select(pair => new { id = pair.Key, label = pair.Key, available = pair.Value }), recovery_required = false } });
         Check(SetupRequirements.Parse(SerializeState(State().Items)).Attention() is null);
-        foreach (string id in new[] { "architecture", "location", "pairing-radio" }) {
+        foreach (string id in new[] { "architecture", "windows", "package" }) {
             invalid = false; try { SetupRequirements.Parse(SerializeState(State().Items.Where(pair => pair.Key != id))); } catch (InvalidDataException) { invalid = true; } Check(invalid);
         }
-        Check(SetupRequirements.Parse(SerializeState(denied.Items)).Attention()!.SettingsUri == "ms-settings:privacy-location");
+        Check(SetupRequirements.Parse(SerializeState(denied.Items)).Attention() is null);
+        var installOnly = State().Items.Where(pair => pair.Key is "architecture" or "windows" or "package" or "npcap" or "vigem");
+        Check(SetupRequirements.Parse(SerializeState(installOnly)).Attention() is null);
         using (var form = new SetupForm(new Fake { Before = State(), After = State() }, launch: false, preview: true)) {
-            var attention = denied.Attention()!; form.Apply(attention);
+            var attention = State(missing: "windows").Attention()!; form.Apply(attention);
             form.OpenSettings(_ => throw new System.ComponentModel.Win32Exception(2));
             Check(form.CurrentView.Stage == SetupStage.SettingsHelp && form.CurrentView.SettingsUri == attention.SettingsUri && form.CurrentView.Message.Contains("Windows + I"));
             int opens = 0; form.OpenSettings(uri => { Check(uri == attention.SettingsUri); opens++; });

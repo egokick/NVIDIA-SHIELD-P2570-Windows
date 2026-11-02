@@ -20,6 +20,7 @@ mod controller;
 mod controls;
 mod diagnostic;
 mod display;
+mod firmware;
 mod launch;
 mod profile;
 mod stick;
@@ -165,7 +166,7 @@ fn main() {
     if !args.run {
         println!(
             "{}",
-            json!({"stage":"plan","hardware_opened":false,"supported_channels":[1,2,3,4,5,6,7,8,9,10,11,36,40,44,48],"gamepad_only":false,"touchpad_mouse":true,"desktop_buttons":true,"starts_or_stops_ap":false,"requires_installed_private_config":true,"lifetime":"owner process and heartbeat","owner_heartbeat":"alive\\n every <=1s; loss >=3s stops child"})
+            json!({"stage":"plan","hardware_opened":false,"supported_channels":[36,40,44,48,149,153,157,161,165],"required_band":"5ghz","gamepad_only":false,"touchpad_mouse":true,"desktop_buttons":true,"starts_or_stops_ap":false,"requires_installed_private_config":true,"lifetime":"owner process and heartbeat","owner_heartbeat":"alive\\n every <=1s; loss >=3s stops child"})
         );
         return;
     }
@@ -461,8 +462,23 @@ fn handle_event(
             ctl.start(now, host);
             log.event("expected-controller-session", json!({}))?;
         }
+        Event::Resumed { .. } => {
+            // The same verified peer resumed its existing Ozmo session. Keep
+            // controller initialization and any current input state intact.
+            log.event("expected-controller-resumed", json!({}))?;
+        }
         Event::Usb(message) => {
-            for report in ctl.on_usb(now, &message, host) {
+            let previous_firmware = ctl.firmware();
+            let reports = ctl.on_usb(now, &message, host);
+            if ctl.firmware() != previous_firmware
+                && let Some(version) = ctl.firmware()
+            {
+                log.event(
+                    "controller-firmware",
+                    json!({"version":version.to_string()}),
+                )?;
+            }
+            for report in reports {
                 match report {
                     controller::Report::Pad(p) if ctl.ready() => {
                         if output.slot.is_none() {

@@ -12,6 +12,8 @@ internal static partial class Program
     private sealed record DiscoveryCache(int Schema, DateTimeOffset Created, Guid Wifi, Guid Uplink, DiscoveredTarget[] Targets);
     private static bool ValidMac(int[]? mac) => mac is { Length: 6 } && mac.All(b => b is >= 0 and <= 255) && mac.Any(b => b != 0) && (mac[0] & 1) == 0;
     private static bool ValidHash(string? hash) => hash is { Length: 64 } && hash.All(Uri.IsHexDigit);
+    internal static bool CanProvision(bool selectedRadioOnly, bool uplinkUnchanged, int groupCount, int? channel) =>
+        selectedRadioOnly && uplinkUnchanged && groupCount == 1 && (!channel.HasValue || ConnectionSettings.IsPairingChannel(channel.Value));
     private static Configuration NewSetupConfiguration(Guid wifi, Guid uplink, int[] mac) => Configuration.Parse(JsonSerializer.SerializeToUtf8Bytes(new {
         schema = 1, wifi_guid = wifi, uplink_guid = uplink, controller_mac = mac, channel = 36,
         ssid = "DIRECT-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(8)), passphrase = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)) }));
@@ -44,6 +46,19 @@ internal static partial class Program
         if (!EmptyHotspot(prepared.Manager.TetheringOperationalState, prepared.Manager.ClientCount) || ChannelInspection.ActiveGroups().Length != 0)
             throw new InvalidOperationException("Turn off the remaining Windows hotspot before recovery.");
         File.Delete(SetupActive); Log("recovery-complete", new { setup_marker_cleared = true, candidate_credentials_retained = true, radio_mutations = 0 }); return 0;
+    }
+    private static async Task<int?> ReadNativeSetupChannel(Guid expectedGroup)
+    {
+        Guid[] groups = ChannelInspection.ActiveGroups();
+        if (groups.Length != 1) throw new PairingNetworkException(groups.Length == 0 ? PairingNetworkFailureReason.NoGroup : PairingNetworkFailureReason.AmbiguousGroups, groupCount: groups.Length);
+        if (groups[0] != expectedGroup) throw new PairingNetworkException(PairingNetworkFailureReason.NetworkChanged, groupCount: groups.Length);
+        int? channel;
+        try { channel = await Task.Run(() => ChannelInspection.ReadPairing(groups[0])).WaitAsync(TimeSpan.FromSeconds(2)); }
+        catch (TimeoutException) { throw new PairingNetworkException(PairingNetworkFailureReason.ChannelQueryTimedOut, groupCount: 1); }
+        catch (PairingNetworkException) { throw; }
+        catch (InvalidOperationException) { throw new PairingNetworkException(PairingNetworkFailureReason.ChannelUnavailable, groupCount: 1); }
+        if (channel.HasValue) ConnectionSettings.RequirePairingChannel(channel, 1);
+        return channel;
     }
     private static async Task<int> Setup(string mode, Guid wifi, Guid uplink, string targetHash)
     {
@@ -79,17 +94,22 @@ internal static partial class Program
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false) } };
         process.StartInfo.ArgumentList.Add("--internal-query"); process.StartInfo.ArgumentList.Add(mode);
-        bool workerStarted = false, workerStopped = false, clean = false, pairSuccess = false, identity = false, connectAttempted = false, channelApproved = false, callback = false;
-        bool? unknown = pair ? true : false; int? exit = null; string? error = null; JsonElement? complete = null;
-        Task? outputTask = null, errorTask = null;
+        bool workerStarted = false, workerStopped = false, clean = false, pairSuccess = false, identity = false, connectAttempted = false, provisioningApproved = false, callback = false;
+        bool? unknown = false; int? exit = null; string? error = null; JsonElement? complete = null;
+        PairingNetworkException? pairingFailure = null;
+        Task? outputTask = null, errorTask = null, bandTask = null;
+        using var bandCancellation = new CancellationTokenSource();
         try
         {
             checkpoint = "setup-worker-start";
             if (!Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(package.PairingPath))).Equals(package.PairingHash, StringComparison.Ordinal)) throw new InvalidOperationException("Pairing worker changed.");
-            if (!EmptyHotspot(prepared.Manager.TetheringOperationalState, prepared.Manager.ClientCount) || ChannelInspection.ActiveGroups().Length != 0 || UplinkState() != prepared.UplinkAddressState)
+            if (!EmptyHotspot(prepared.Manager.TetheringOperationalState, prepared.Manager.ClientCount) ||
+                ChannelInspection.ActiveGroups().Length != 0 || UplinkState() != prepared.UplinkAddressState)
                 throw new InvalidOperationException("Setup baseline changed.");
-            Log(pair ? "pairing-started" : "discovery-started", new { seconds = pair ? 90 : 30, candidate_credentials_retained = pair, credentials_in_arguments = false }, true);
+            checkpoint = "setup-worker-start";
+            Log(pair ? "pairing-started" : "discovery-started", new { seconds = (int)(pair ? PairingTiming.WorkerPairBudget : PairingTiming.WorkerDiscoveryBudget).TotalSeconds, candidate_credentials_retained = pair, credentials_in_arguments = false, setup_network = "native-wcn" }, true);
             if (!process.Start()) throw new InvalidOperationException("Worker start failed."); workerStarted = true;
+            bandTask = Task.Run(() => SetupBandGuard.Monitor(() => process.HasExited, bandCancellation.Token));
             process.StandardInput.NewLine = "\n";
             if (pair)
             {
@@ -116,12 +136,29 @@ internal static partial class Program
                         if (!pair) throw new FormatException("Unexpected provision request.");
                         checkpoint = "pairing-bootstrap-channel";
                         Guid[] groups = ChannelInspection.ActiveGroups();
-                        if (groups.Length == 1) bootstrapChannel = await Task.Run(() => ChannelInspection.Read(groups[0])).WaitAsync(TimeSpan.FromSeconds(2));
-                        if (!bootstrapChannel.HasValue || !ConnectionSettings.ValidChannel(bootstrapChannel.Value) || UplinkState() != prepared.UplinkAddressState)
-                            throw new InvalidOperationException("WCN bootstrap must use a supported controller channel and the selected interfaces.");
-                        channelApproved = true; await process.StandardInput.WriteLineAsync("approve-bootstrap-channel"); await process.StandardInput.FlushAsync(); process.StandardInput.Close();
+                        if (groups.Length != 1) throw new PairingNetworkException(groups.Length == 0 ? PairingNetworkFailureReason.NoGroup : PairingNetworkFailureReason.AmbiguousGroups, groupCount: groups.Length);
+                        bootstrapChannel = await ReadNativeSetupChannel(groups[0]);
+                        var radios = await WiFiAdapter.FindAllAdaptersAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(8));
+                        if (!CanProvision(radios.Count == 1 && radios[0].NetworkAdapter.NetworkAdapterId == wifi,
+                            UplinkState() == prepared.UplinkAddressState, groups.Length, bootstrapChannel))
+                        {
+                            checkpoint = "setup-interface-changed";
+                            throw new InvalidOperationException("The selected Wi-Fi or Internet adapter changed before provisioning.");
+                        }
+                        // Recheck after the asynchronous adapter enumeration, just
+                        // before the worker is allowed to send credentials.
+                        bootstrapChannel = await ReadNativeSetupChannel(groups[0]);
+                        bandCancellation.Token.ThrowIfCancellationRequested();
+                        Log("provisioning-approved", new { active_groups = groups.Length, bootstrap_channel = bootstrapChannel,
+                            channel_confirmed = bootstrapChannel.HasValue, bootstrap_channel_query_error = bootstrapChannel.HasValue ? (int?)null : 5023,
+                            input_requires_verified_five_ghz = true });
+                        // After approval the worker may provision before its next
+                        // log line reaches us. Keep that outcome uncertain until
+                        // a terminal worker receipt establishes what happened.
+                        provisioningApproved = true; unknown = true;
+                        await process.StandardInput.WriteLineAsync("approve-provisioning"); await process.StandardInput.FlushAsync(); process.StandardInput.Close();
                     }
-                    if (phase == "connect_begin") connectAttempted = true;
+                    if (phase == "connect_begin") { connectAttempted = true; unknown = true; }
                     if (phase == "connect_succeeded") callback = true;
                     if (phase == "complete") complete = value.Clone();
                     // All other worker messages contain only phase/HRESULT/hashed
@@ -131,21 +168,33 @@ internal static partial class Program
             });
             errorTask = Task.Run(async () => { while (await process.StandardError.ReadLineAsync() is not null) Log("pairing-worker-stderr", new { content_redacted = true }); });
             Task wait = process.WaitForExitAsync();
-            Task first = await Task.WhenAny(wait, outputTask, Task.Delay(TimeSpan.FromSeconds(pair ? 90 : 30)));
+            Task first = await Task.WhenAny(wait, outputTask, bandTask, Task.Delay(pair ? PairingTiming.WorkerPairBudget : PairingTiming.WorkerDiscoveryBudget));
+            if (first == bandTask) await bandTask;
             if (first == outputTask && outputTask.IsFaulted) await outputTask;
             if (!process.HasExited) await wait.WaitAsync(TimeSpan.FromSeconds(first == outputTask ? 2 : 1));
             await Task.WhenAll(outputTask, errorTask).WaitAsync(TimeSpan.FromSeconds(2));
+            await bandTask.WaitAsync(TimeSpan.FromSeconds(3));
             exit = process.ExitCode; workerStopped = true;
             if (complete is JsonElement c)
             {
                 identity = c.GetProperty("identity_confirmed").GetBoolean();
                 unknown = c.GetProperty("provision_outcome_unknown").GetBoolean();
-                pairSuccess = pair && exit == 0 && c.GetProperty("ok").GetBoolean() && c.GetProperty("pairing_success").GetBoolean() && identity && callback && channelApproved;
+                pairSuccess = pair && exit == 0 && c.GetProperty("ok").GetBoolean() && c.GetProperty("pairing_success").GetBoolean() && identity && callback && provisioningApproved;
             }
         }
-        catch (Exception ex) { error = ex.GetType().Name; Log("setup-error", new { checkpoint, type = error, hresult = $"0x{ex.HResult:X8}" }); }
+        catch (Exception ex)
+        {
+            pairingFailure = ex as PairingNetworkException;
+            if (pairingFailure is not null) checkpoint = "pairing-network-unavailable";
+            error = ex.GetType().Name;
+            Log("setup-error", new { checkpoint, type = error, hresult = $"0x{ex.HResult:X8}",
+                pairing_network_failure_reason = pairingFailure?.ReasonCode, observed_channel = pairingFailure?.Channel, active_groups = pairingFailure?.GroupCount });
+        }
         finally
         {
+            // No delayed output callback may approve provisioning during cleanup
+            // or after a new attempt starts.
+            bandCancellation.Cancel();
             if (workerStarted)
             {
                 try { process.StandardInput.Close(); } catch { }
@@ -159,6 +208,7 @@ internal static partial class Program
                 try { if (errorTask is not null) await errorTask.WaitAsync(TimeSpan.FromSeconds(2)); } catch { }
             }
             else workerStopped = true;
+            try { if (bandTask is not null) await bandTask.WaitAsync(TimeSpan.FromSeconds(3)); } catch { }
             var until = DateTimeOffset.UtcNow.AddSeconds(8);
             do
             {
@@ -176,11 +226,14 @@ internal static partial class Program
         {
             checkpoint = "persist-pairing";
             candidate = Configuration.Parse(JsonSerializer.SerializeToUtf8Bytes(new { schema = candidate!.Schema, wifi_guid = candidate.Wifi,
-                uplink_guid = candidate.Uplink, controller_mac = candidate.ControllerMac, channel = bootstrapChannel!.Value,
+                // The saved channel is compatibility metadata, never evidence of
+                // the pairing channel or authorization for the later input session.
+                uplink_guid = candidate.Uplink, controller_mac = candidate.ControllerMac, channel = bootstrapChannel ?? candidate.Channel,
                 ssid = candidate.Ssid, passphrase = candidate.Passphrase }));
             PrivateFiles.WriteAtomic(PrivateFiles.Config, candidate!); config = Configuration.Load(PrivateFiles.Config);
             PrivateFiles.WriteAtomic(ProvisionReceipt, new { schema = 1, utc = DateTimeOffset.UtcNow, pairing_success = true, identity_confirmed = true,
-                connect_success_callback_observed = true, pc_cleanup_verified = true, config_sha256 = config.SourceSha256, channel = config.Channel, bootstrap_channel = bootstrapChannel, key_representation = "networkKey" });
+                connect_success_callback_observed = true, pc_cleanup_verified = true, config_sha256 = config.SourceSha256, channel = config.Channel,
+                bootstrap_channel = bootstrapChannel, channel_confirmed = bootstrapChannel.HasValue, key_representation = "networkKey" });
             Log("pairing-succeeded", new { durable_configuration = true, bootstrap_channel = bootstrapChannel, wireless_input_verified = false }, true);
         }
         else if (okay)
@@ -189,9 +242,12 @@ internal static partial class Program
             foreach (var target in targets.Values) Log("candidate", new { target_id_hash = target.TargetIdHash, display_name = "NVIDIA SHIELD P2570 (" + target.TargetIdHash[..8] + ")" }, true);
             Log("discovery-complete", new { candidates = targets.Count, pc_cleanup_verified = clean });
         }
+        bool tasksSettled = (outputTask?.IsCompleted ?? true) && (errorTask?.IsCompleted ?? true) && (bandTask?.IsCompleted ?? true);
         PrivateFiles.WriteAtomic(Path.Combine(run, "receipt.json"), new { ok = okay && logFailures == 0, mode, pairing_success = pairSuccess, identity_confirmed = identity,
-            connect_attempted = connectAttempted, connect_success_callback_observed = callback, channel_confirmed = channelApproved, pc_cleanup_verified = clean,
-            provision_outcome_unknown = unknown, candidate_credentials_retained = pair, worker_stopped = workerStopped, worker_exit = exit, error_type = error, log_failures = logFailures });
+            setup_network = "native-wcn", worker_tasks_settled = tasksSettled,
+            connect_attempted = connectAttempted, connect_success_callback_observed = callback, channel_confirmed = bootstrapChannel.HasValue, provisioning_approved = provisioningApproved, pc_cleanup_verified = clean,
+            provision_outcome_unknown = unknown, candidate_credentials_retained = pair, worker_stopped = workerStopped, worker_exit = exit, error_type = error, log_failures = logFailures,
+            pairing_network_failure_reason = pairingFailure?.ReasonCode, observed_channel = pairingFailure?.Channel, active_groups = pairingFailure?.GroupCount });
         return okay && logFailures == 0 ? 0 : 1;
     }
 }

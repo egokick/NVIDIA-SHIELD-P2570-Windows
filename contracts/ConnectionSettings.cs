@@ -1,66 +1,127 @@
-using System.Text.Json;
-
 internal static class ConnectionSettings
 {
-    internal static readonly string[] Choices = ["Automatic (prefer 5 GHz)", "5 GHz only", "2.4 GHz only"];
-    internal static string FilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NVIDIA-SHIELD-P2570-Windows", "connection.json");
-    internal static int Parse(string text)
+    internal const string FiveGhzRequirement = "Controller input currently only works on 5 GHz.";
+    internal const string PairingBandExplanation = "Controller input uses 5 GHz. Windows may briefly use 2.4 GHz for pairing.";
+    internal const string FiveGhzOnlyMessage = FiveGhzRequirement + " Windows could not verify a supported 5 GHz network for the controller.";
+    internal const string SupportedChannelsMessage = "Supported 5 GHz channels: 36–48 and 149–165.";
+
+    internal static FiveGhzFailureText DescribeFiveGhzFailure(string? reason, int? channel = null, bool supportsFive = false, bool pairing = true)
     {
-        using var doc = JsonDocument.Parse(text);
-        var fields = doc.RootElement.EnumerateObject().ToArray();
-        if (fields.Length != 2 || fields.Count(f => f.Name == "schema") != 1 || fields.Count(f => f.Name == "band") != 1 || doc.RootElement.GetProperty("schema").GetInt32() != 1)
-            throw new FormatException("Invalid connection settings. Choose a Wi-Fi band in Settings again.");
-        return doc.RootElement.GetProperty("band").GetString() switch { "auto" => 0, "5" => 1, "2.4" => 2, _ => throw new FormatException("Unknown Wi-Fi band.") };
+        string network = pairing ? "pairing network" : "controller network";
+        string heading = reason == "unsupported-hardware" ? "5 GHz required" : pairing ? "5 GHz pairing unavailable" : "5 GHz connection unavailable";
+        string explanation = reason switch {
+            "unsupported-hardware" => "Windows reports that this adapter cannot create a 5 GHz controller network.",
+            "observed-2.4-ghz" => (supportsFive ? "Your adapter supports 5 GHz, but Windows created the " : "Windows created the ") + network + " on 2.4 GHz" + (channel is >= 1 and <= 14 ? $" (channel {channel})" : "") + ".",
+            "unsupported-5-ghz-channel" when channel is >= 32 and <= 177 && !IsFiveGhzChannel(channel.Value) => $"Windows created the {network} on 5 GHz channel {channel}, which this app does not support.",
+            "unsupported-5-ghz-channel" => $"Windows selected a 5 GHz channel for the {network} that this app does not support.",
+            "unsupported-channel" => $"Windows selected an unsupported channel for the {network}.",
+            "no-group" => "Windows did not expose a controller network whose channel the app could verify.",
+            "ambiguous-groups" => "Windows exposed multiple controller networks, so the app could not verify which one to use.",
+            "channel-query-timeout" => "Windows did not answer the channel check in time. The app could not verify the controller network's band.",
+            _ => "The app could not read and verify the controller network's channel. This does not mean your adapter lacks 5 GHz."
+        };
+        return new(heading, explanation + " " + FiveGhzRequirement);
     }
-    internal static string Serialize(int choice) => JsonSerializer.Serialize(new { schema = 1, band = choice switch { 0 => "auto", 1 => "5", 2 => "2.4", _ => throw new ArgumentOutOfRangeException(nameof(choice)) } });
-    internal static int Load()
+
+    // WCN may use 2.4 GHz while provisioning credentials. Input is checked separately.
+    internal static bool ValidChannel(int channel) => channel is >= 1 and <= 11 || IsFiveGhzChannel(channel);
+    internal static bool IsPairingChannel(int channel) => ValidChannel(channel);
+    internal static void RequirePairingChannel(int? channel, int? groupCount = null)
     {
-        CheckPath();
-        if (!File.Exists(FilePath)) return 0;
-        if (new FileInfo(FilePath).Length > 1024) throw new FormatException("Connection settings are too large.");
-        return Parse(File.ReadAllText(FilePath));
+        if (channel.HasValue && IsPairingChannel(channel.Value)) return;
+        throw new PairingNetworkException(channel.HasValue ? PairingNetworkFailureReason.UnsupportedChannel : PairingNetworkFailureReason.ChannelUnavailable, channel, groupCount);
     }
-    private static void CheckPath()
+    // P2570 FCC report NEI-FICP-3-1404C046 also certifies channels 149–165.
+    internal static bool IsFiveGhzChannel(int channel) => channel is 36 or 40 or 44 or 48 or 149 or 153 or 157 or 161 or 165;
+    internal static bool Matches(int channel, int band) => band == 5 && IsFiveGhzChannel(channel);
+    internal static int Select(bool fiveSupported) => fiveSupported ? 5 : throw new FiveGhzRequiredException(FiveGhzFailureReason.UnsupportedHardware);
+    internal static void RequireFiveGhzChannel(int? channel, int? groupCount = null)
     {
-        for (string? path = FilePath; path is not null; path = Path.GetDirectoryName(path))
-            if ((File.Exists(path) || Directory.Exists(path)) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                throw new IOException("Connection settings cannot use a linked path.");
+        if (channel.HasValue && IsFiveGhzChannel(channel.Value)) return;
+        var reason = channel switch {
+            null => FiveGhzFailureReason.ChannelUnavailable,
+            >= 1 and <= 14 => FiveGhzFailureReason.TwoPointFourGhz,
+            >= 32 and <= 177 => FiveGhzFailureReason.UnsupportedFiveGhzChannel,
+            _ => FiveGhzFailureReason.UnsupportedChannel
+        };
+        throw new FiveGhzRequiredException(reason, channel, groupCount);
     }
-    internal static void Save(int choice)
-    {
-        string text = Serialize(choice); CheckPath();
-        string temporary = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try { File.WriteAllText(temporary, text); File.Move(temporary, FilePath, true); }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
-    }
-    // Zero means automatic. Explicit choices never switch bands silently.
-    internal static int Select(int choice, bool five, bool two) => choice switch {
-        0 when five => 5, 0 when two => 2, 1 when five => 5, 2 when two => 2,
-        >= 0 and <= 2 => throw new InvalidOperationException("The selected Wi-Fi band is unavailable. Choose Automatic or another band in Settings."),
-        _ => throw new ArgumentOutOfRangeException(nameof(choice))
-    };
-    internal static bool ValidChannel(int channel) => channel is >= 1 and <= 11 or 36 or 40 or 44 or 48;
-    internal static bool RetryOnTwo(int preference, int band, bool supportsTwo, int status, bool empty) => preference == 0 && band == 5 && supportsTwo && status is 10 or 11 && empty;
-    internal static bool Matches(int channel, int band) => band == 2 ? channel is >= 1 and <= 11 : band == 5 && channel is 36 or 40 or 44 or 48;
+
     internal static int SelfTest()
     {
         int count = 0;
-        void Check(bool value) { count++; if (!value) throw new InvalidOperationException("Band selection test failed."); }
-        for (int i = 0; i < 3; i++) Check(Parse(Serialize(i)) == i);
-        foreach (string invalid in new[] { "{}", "{\"schema\":1,\"band\":\"auto\",\"band\":\"5\"}", "{\"schema\":2,\"band\":\"auto\"}", "{\"schema\":1,\"band\":\"6\"}" }) {
-            bool rejected = false; try { Parse(invalid); } catch (Exception error) when (error is FormatException or KeyNotFoundException) { rejected = true; } Check(rejected);
+        void Check(bool value) { count++; if (!value) throw new InvalidOperationException("5 GHz policy check failed."); }
+        Check(Select(true) == 5);
+        bool rejected = false; try { Select(false); } catch (FiveGhzRequiredException ex) { rejected = ex.Reason == FiveGhzFailureReason.UnsupportedHardware && ex.ReasonCode == "unsupported-hardware" && ex.Channel is null && ex.GroupCount is null; } Check(rejected);
+        foreach (int channel in new[] { 36, 40, 44, 48, 149, 153, 157, 161, 165 }) { RequireFiveGhzChannel(channel); Check(Matches(channel, 5)); }
+        foreach (var (channel, reason) in new (int?, FiveGhzFailureReason)[] {
+            (null, FiveGhzFailureReason.ChannelUnavailable), (0, FiveGhzFailureReason.UnsupportedChannel),
+            (1, FiveGhzFailureReason.TwoPointFourGhz), (6, FiveGhzFailureReason.TwoPointFourGhz),
+            (11, FiveGhzFailureReason.TwoPointFourGhz), (14, FiveGhzFailureReason.TwoPointFourGhz),
+            (52, FiveGhzFailureReason.UnsupportedFiveGhzChannel), (64, FiveGhzFailureReason.UnsupportedFiveGhzChannel) }) {
+            rejected = false;
+            try { RequireFiveGhzChannel(channel, 1); }
+            catch (FiveGhzRequiredException ex) { rejected = ex.Reason == reason && ex.Channel == channel && ex.GroupCount == 1; }
+            Check(rejected);
         }
-        Check(Select(0, true, true) == 5); Check(Select(0, false, true) == 2);
-        Check(Select(1, true, true) == 5); Check(Select(2, true, true) == 2);
-        foreach (var scenario in new[] { (0, false, false), (1, false, true), (2, true, false) }) {
-            bool rejected = false; try { Select(scenario.Item1, scenario.Item2, scenario.Item3); } catch (InvalidOperationException) { rejected = true; } Check(rejected);
+        Check(!Matches(6, 2) && !Matches(36, 2));
+        Check(ValidChannel(6));
+        foreach (int channel in new[] { 1, 6, 11, 36, 149, 165 }) { RequirePairingChannel(channel); Check(IsPairingChannel(channel)); }
+        foreach (int? channel in new int?[] { null, 0, 12, 14, 64 }) {
+            rejected = false;
+            try { RequirePairingChannel(channel, 1); }
+            catch (PairingNetworkException ex) { rejected = ex.Channel == channel && ex.GroupCount == 1 && ex.Reason == (channel.HasValue ? PairingNetworkFailureReason.UnsupportedChannel : PairingNetworkFailureReason.ChannelUnavailable); }
+            Check(rejected);
         }
-        foreach (int c in new[] { 1, 6, 11, 36, 40, 44, 48 }) Check(ValidChannel(c));
-        foreach (int c in new[] { 0, 12, 14, 35, 52, 149 }) Check(!ValidChannel(c));
-        Check(Matches(6, 2) && !Matches(36, 2) && Matches(40, 5) && !Matches(6, 5));
-        Check(RetryOnTwo(0, 5, true, 10, true) && RetryOnTwo(0, 5, true, 11, true));
-        Check(!RetryOnTwo(1, 5, true, 10, true) && !RetryOnTwo(0, 5, true, 9, true));
-        Check(!RetryOnTwo(0, 5, false, 10, true) && !RetryOnTwo(0, 5, true, 10, false));
         return count;
     }
+}
+
+internal enum PairingNetworkFailureReason
+{
+    UnsupportedChannel, NoGroup, AmbiguousGroups, ChannelUnavailable, ChannelQueryTimedOut, NetworkChanged
+}
+
+internal sealed class PairingNetworkException(PairingNetworkFailureReason reason, int? channel = null, int? groupCount = null)
+    : InvalidOperationException("Windows could not verify the temporary pairing network. " + ConnectionSettings.PairingBandExplanation)
+{
+    internal PairingNetworkFailureReason Reason { get; } = reason;
+    internal int? Channel { get; } = channel;
+    internal int? GroupCount { get; } = groupCount;
+    internal string ReasonCode => Reason switch {
+        PairingNetworkFailureReason.UnsupportedChannel => "unsupported-channel",
+        PairingNetworkFailureReason.NoGroup => "no-group",
+        PairingNetworkFailureReason.AmbiguousGroups => "ambiguous-groups",
+        PairingNetworkFailureReason.ChannelUnavailable => "channel-unavailable",
+        PairingNetworkFailureReason.ChannelQueryTimedOut => "channel-query-timeout",
+        PairingNetworkFailureReason.NetworkChanged => "network-changed",
+        _ => "unspecified"
+    };
+}
+
+internal sealed record FiveGhzFailureText(string Heading, string Message);
+
+internal enum FiveGhzFailureReason
+{
+    Unspecified, UnsupportedHardware, TwoPointFourGhz, UnsupportedFiveGhzChannel,
+    UnsupportedChannel, NoGroup, AmbiguousGroups, ChannelUnavailable, ChannelQueryTimedOut
+}
+
+internal sealed class FiveGhzRequiredException(FiveGhzFailureReason reason = FiveGhzFailureReason.Unspecified, int? channel = null, int? groupCount = null)
+    : InvalidOperationException(ConnectionSettings.FiveGhzOnlyMessage)
+{
+    internal FiveGhzFailureReason Reason { get; } = reason;
+    internal int? Channel { get; } = channel;
+    internal int? GroupCount { get; } = groupCount;
+    internal string ReasonCode => Reason switch {
+        FiveGhzFailureReason.UnsupportedHardware => "unsupported-hardware",
+        FiveGhzFailureReason.TwoPointFourGhz => "observed-2.4-ghz",
+        FiveGhzFailureReason.UnsupportedFiveGhzChannel => "unsupported-5-ghz-channel",
+        FiveGhzFailureReason.UnsupportedChannel => "unsupported-channel",
+        FiveGhzFailureReason.NoGroup => "no-group",
+        FiveGhzFailureReason.AmbiguousGroups => "ambiguous-groups",
+        FiveGhzFailureReason.ChannelUnavailable => "channel-unavailable",
+        FiveGhzFailureReason.ChannelQueryTimedOut => "channel-query-timeout",
+        _ => "unspecified"
+    };
 }

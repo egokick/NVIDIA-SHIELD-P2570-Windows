@@ -11,7 +11,8 @@ $ProgressPreference = 'SilentlyContinue'
 function Get-InstallerArguments([string]$Name,[hashtable]$NpcapFeatures = @{}) {
     if ($Name -eq 'Npcap') {
         # The free edition must show its own licence. These documented GUI
-        # options prevent the common admin-only mistake without using /S.
+        # options lock the required non-admin setting without using /S.
+        # Optional capture features are preserved for other applications.
         $arguments = @('/admin_only=disabled','/no_kill=yes')
         foreach ($option in @('winpcap_mode','dot11_support','loopback_support')) {
             $value = if ($NpcapFeatures[$option] -eq 1) { 'yes' } else { 'no' }

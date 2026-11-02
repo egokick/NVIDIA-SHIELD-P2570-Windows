@@ -13,6 +13,8 @@ internal sealed class StatusModel
     internal ControllerState State { get; private set; } = ControllerState.NotPaired;
     internal bool Paired { get; private set; }
     internal bool TransportReady { get; private set; }
+    internal bool ControllerDetected { get; private set; }
+    internal string? FirmwareVersion { get; private set; }
     internal string Message { get; private set; } = "Pair your controller to get started.";
     internal void ApplyCapabilities(Capabilities value)
     {
@@ -20,11 +22,13 @@ internal sealed class StatusModel
         if (value.RecoveryRequired) { Fail("The previous connection needs cleanup. Use Recover connection before connecting again."); return; }
         SetDisconnected();
     }
-    internal void BeginPairing() { State = ControllerState.Pairing; TransportReady = false; Message = "Looking for the flashing controller…"; }
+    internal void BeginPairing() { State = ControllerState.Pairing; TransportReady = false; ControllerDetected = false; FirmwareVersion = null; Message = "Looking for the flashing controller…"; }
     internal void PairSucceeded() { Paired = true; SetDisconnected(); }
     internal void SetDisconnected(string? message = null)
     {
         TransportReady = false;
+        ControllerDetected = false;
+        FirmwareVersion = null;
         State = Paired ? ControllerState.PairedDisconnected : ControllerState.NotPaired;
         Message = message ?? (Paired ? "Your pairing is saved. Choose Connect to use your controller." : "Pair your controller to get started.");
     }
@@ -33,15 +37,19 @@ internal sealed class StatusModel
         // A network connection or a WPS callback is never gamepad readiness.
         bool connected = value.TryGetProperty("connected", out var c) && c.ValueKind == JsonValueKind.True;
         TransportReady = value.TryGetProperty("transport_ready", out var t) && t.ValueKind == JsonValueKind.True;
+        // A ready receiver and saved pairing do not prove the controller has joined.
+        ControllerDetected = Paired && TransportReady && value.TryGetProperty("controller_detected", out var d) && d.ValueKind == JsonValueKind.True;
+        FirmwareVersion = Paired && TransportReady && value.TryGetProperty("firmware_version", out var f) && f.ValueKind == JsonValueKind.String && ControllerFirmware.IsValid(f.GetString()) ? f.GetString() : null;
         if (!Paired) return;
         State = connected ? ControllerState.Connected : ControllerState.PairedDisconnected;
         Message = connected ? "Wireless gamepad input is active. Open your game and play."
-            : TransportReady ? "Move either joystick left and right to finish connecting."
+            : ControllerDetected ? "Move either joystick left and right to finish connecting."
+            : TransportReady ? "Your pairing is saved. Waiting for the controller to connect wirelessly."
             : "Starting the wireless connection…";
     }
-    internal void Fail(string message) { State = ControllerState.Error; TransportReady = false; Message = message; }
+    internal void Fail(string message) { State = ControllerState.Error; TransportReady = false; ControllerDetected = false; FirmwareVersion = null; Message = message; }
     internal static string Title(ControllerState state) => state switch {
         ControllerState.NotPaired => "Not paired", ControllerState.Pairing => "Pairing",
-        ControllerState.PairedDisconnected => "Paired · disconnected", ControllerState.Connected => "Connected", _ => "Needs attention"
+        ControllerState.PairedDisconnected => "Pairing saved · disconnected", ControllerState.Connected => "Connected", _ => "Needs attention"
     };
 }

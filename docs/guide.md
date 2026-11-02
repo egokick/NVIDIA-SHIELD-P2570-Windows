@@ -13,6 +13,8 @@
 
 Setup checks the required drivers, includes the gamepad driver, and downloads Npcap from its official website when needed. Follow the Npcap licence and Windows approval prompts; Setup resumes the check for you. Network adapters are selected automatically when there is one clear choice; the app asks you to choose in **Settings** when needed.
 
+Leave the Npcap options as Setup selects them. Non-administrator capture is required and locked on; raw 802.11/monitor mode and WinPcap compatibility are not required. Setup preserves those optional features if another application already uses them, and checks that both drivers can load before finishing.
+
 Next time, open the app and briefly touch the NVIDIA logo. Your pairing is saved, and the app starts the connection automatically. **Done**, **Hide to tray**, or closing the window keeps it running while you play. Click its tray icon to reopen it. **Settings → Disconnect** stops the connection; **Exit** in the tray menu closes the app and restores the network settings it temporarily changed.
 
 The app installer includes its .NET runtime and the gamepad driver. A first installation needs Internet access to download Npcap; its free licence requires its own interactive setup. Setup verifies the official driver files before opening them. Windows administrator approval may be required. You do not need to find or download dependencies yourself.
@@ -21,7 +23,7 @@ The app installer includes its .NET runtime and the gamepad driver. A first inst
 
 - **Windows 11 24H2 or later, x64.** The app checks for the required Windows networking APIs.
 - An original **NVIDIA SHIELD P2570** with sufficient battery charge.
-- A Wi-Fi adapter with Windows Mobile Hotspot support on **2.4 GHz or 5 GHz**. Attach the PC's Wi-Fi antenna. Automatic prefers 5 GHz; choose a band in **Settings → Controller Wi-Fi band**. A change takes effect the next time you connect.
+- A Wi-Fi adapter with Windows Mobile Hotspot support on **5 GHz**, using channel **36, 40, 44, 48, 149, 153, 157, 161 or 165**. Attach the PC's Wi-Fi antenna. Controller input requires 5 GHz. Temporary discovery and pairing can use 2.4 or 5 GHz.
 - **Exactly one enabled Wi-Fi adapter.** Disable additional Wi-Fi adapters while using this release; Bluetooth adapters do not count.
 - An active Internet-capable network connection for Windows Mobile Hotspot. **Ethernet is recommended.**
 - **Npcap and ViGEmBus.** Setup handles both. The correct Npcap options are preselected; approve its licence and Windows prompts when asked.
@@ -61,14 +63,19 @@ Controller headset audio, microphone and vibration are not implemented. ViGEmBus
 |---|---|
 | Let's connect | Touch and hold the logo until it flashes, then click **It's flashing**. |
 | Finding / Pairing | Keep the logo flashing while the app finishes setup. |
-| Move a joystick | Pairing is complete. Tilt either stick left and right; the app connects automatically when input arrives. |
+| Waiting for controller | Pairing is saved and the receiver is listening, but the controller has not established a wireless session. |
+| Move a joystick | The controller has been detected. Tilt either stick left and right; the app connects automatically when input arrives. |
 | Connected | The controller is sending actual wireless gamepad reports to Windows. |
 | Disconnected | Pairing is saved, but the connection is stopped. Click **Connect**. |
 | One quick setup / A quick fix first | Follow the instruction and use the large button. More detail is in **Settings**. |
 
-The tray tooltip also distinguishes **Not paired**, **Pairing**, **Paired · disconnected**, **Connected**, and **Needs attention**. Pairing alone is never reported as a live connection. The app only accepts the paired controller's network identity and creates one virtual Xbox controller.
+The tray tooltip also distinguishes **Not paired**, **Pairing**, **Pairing saved · disconnected**, **Connected**, and **Needs attention**. Pairing alone is never reported as a live connection. The app only accepts the paired controller's network identity and creates one virtual Xbox controller.
 
 **Test controller** opens Windows' standard Game Controllers panel. Set Xbox gamepad bindings in your game; the connected controls panel configures desktop actions. **Settings** holds network choices, setup checks, logs, and connection controls. To change the saved controller or network adapters, disconnect, choose **Forget controller…**, confirm, and pair again. This removes the app's saved pairing; it does not reset controller firmware.
+
+**Settings → Controller firmware…** shows the full firmware version read during the current wireless connection. You can also open it from the tray menu. If the controller does not return a readable version, the page says it is unavailable; reconnect to retry. The value is cleared on disconnect and is never inferred from the saved pairing or this project's test controller.
+
+Select a firmware-history entry to read its notes inside the app. The bundled history includes NVIDIA's published `1.96/99/3.71/0.32` listing, this project's partial Ozmo 81 observation, and NVIDIA's 2015 pairing-update notes, which do not name a controller version. Partial versions, missing changelogs and unknown dates are marked explicitly. This is an incomplete history, not a live update check. Source links open the supporting pages. Firmware installation still requires a compatible SHIELD device and a wireless controller connection; this app does not flash firmware.
 
 ## If it will not pair
 
@@ -76,11 +83,15 @@ The tray tooltip also distinguishes **Not paired**, **Pairing**, **Paired · dis
 - Unplug USB from the PC before wireless pairing. A wall charger can supply power without a USB data connection.
 - If the logo will not flash, hold it for **15 seconds**, release, wait five seconds, then hold it for about three seconds again.
 - Close other mobile hotspots or Wi-Fi Direct apps and retry.
+- A **temporary pairing network** error means the app could not verify the network Windows created for setup. Pairing is allowed on 2.4 or 5 GHz; a 2.4 GHz setup network is not a 5 GHz capability failure.
+- **5 GHz connection unavailable** describes a failure of the controller-input network, including an unsupported channel or an unreadable channel check. **5 GHz required** means Windows explicitly reported that the adapter cannot create that 5 GHz connection. Successful pairing alone does not establish that controller input is working.
 - If the app reports an unsupported channel or adapter, see [compatibility and troubleshooting](compatibility.md). Do not install random replacement Wi-Fi drivers or disable driver signing.
 
 Uninstall through **Windows Settings → Apps**. Uninstalling keeps shared Npcap/ViGEmBus drivers and your private pairing details, so it does not break other applications.
 
 ## Privacy and permissions
+
+Installing the app and drivers does not require Location access or Wi-Fi discovery. When the app checks Wi-Fi for pairing or connecting, Windows may require **Settings → Privacy & security → Location → Location services** and desktop app access. Windows groups Wi-Fi discovery under Location because nearby network identifiers can reveal a physical location; the app does not request geographic coordinates. This Windows permission is still required for the current connection path. See [Microsoft's Wi-Fi privacy documentation](https://learn.microsoft.com/en-us/windows/win32/nativewifi/wi-fi-access-location-changes).
 
 No account, telemetry or cloud service is used for pairing or play. Pairing credentials and your desktop controls stay in your Windows profile with access restricted to your account. Program mappings run only files you select, with your normal Windows permissions; PowerShell uses the process-only policy described above. The app temporarily starts its own hotspot and restores the prior idle-timeout policy when it stops. It does not register a system service, flash controller firmware, or replace the controller's USB driver.
 

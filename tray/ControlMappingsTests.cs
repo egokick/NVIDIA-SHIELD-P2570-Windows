@@ -76,7 +76,8 @@ internal static class ControlMappingsTests
                 Check(!movementMenu.Items.OfType<ToolStripMenuItem>().Any(item => item.Text == "Keyboard keys"), "movement menus must not display an empty keyboard submenu");
             }
             foreach (int width in new[] { 600, 480 }) {
-                panel.Size = new Size(width, panel.RequiredHeight(width, 96)); _ = panel.Handle; panel.PerformLayout();
+                _ = panel.Handle; int scaledWidth = width * panel.DeviceDpi / 96;
+                panel.Size = new Size(scaledWidth, panel.RequiredHeight(scaledWidth, panel.DeviceDpi)); panel.PerformLayout();
                 Check(panel.Controls.Cast<Control>().All(control => control.Bottom <= panel.ClientSize.Height && control.Right <= panel.ClientSize.Width), "all controls fit the calculated expanded height at each width");
                 Check(panel.LeftStick.Bounds.IntersectsWith(panel.RightStick.Bounds) == false, "stick cards must not overlap");
             }
@@ -188,18 +189,39 @@ internal static class ControlMappingsTests
             Check(connectedReceipt.RootElement.GetProperty("controls_panel_visible").GetBoolean(), "connected state must show controls");
             Check(!form.Visible && !form.ShowInTaskbar, "preview must remain hidden");
             string disconnected = Path.Combine(directory, "disconnected.png");
-            form.RenderPreview(PreviewScene.PairedDisconnected, disconnected, new Size(520, 650));
+            var viewport = new Size(520 * form.DeviceDpi / 96, 650 * form.DeviceDpi / 96);
+            form.RenderPreview(PreviewScene.PairedDisconnected, disconnected, viewport);
             using var disconnectedReceipt = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(disconnected, ".json")));
             Check(!disconnectedReceipt.RootElement.GetProperty("controls_panel_visible").GetBoolean() && disconnectedReceipt.RootElement.GetProperty("mapping_rows").GetInt32() == 0, "disconnect must hide all controls");
-            Check(form.Size == new Size(520, 650), "explicit capture viewport must remain unchanged");
+            Check(form.Size == viewport, "explicit capture viewport must remain unchanged");
         }
-        foreach (var (scene, action) in new[] { (PreviewScene.LocationPermission, "Allow Wi-Fi access"), (PreviewScene.WifiOff, "Open Wi-Fi settings") })
+        foreach (var (scene, action) in new[] { (PreviewScene.LocationPermission, "Allow Wi-Fi access"), (PreviewScene.WifiOff, "Open Wi-Fi settings"), (PreviewScene.FiveGhzRequired, "Check setup") })
         {
             using var form = new MainForm(preview: true);
             string path = Path.Combine(directory, scene + ".png");
             form.RenderPreview(scene, path, new Size(520, 650));
             using var receipt = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(path, ".json")));
             Check(receipt.RootElement.GetProperty("primary_action").GetString() == action && receipt.RootElement.GetProperty("primary_enabled").GetBoolean(), "missing permission and adapter need distinct actionable buttons");
+            if (scene == PreviewScene.FiveGhzRequired)
+            {
+                var expected = ConnectionSettings.DescribeFiveGhzFailure("observed-2.4-ghz", 11, supportsFive: true, pairing: false);
+                Check(receipt.RootElement.GetProperty("heading").GetString() == expected.Heading && receipt.RootElement.GetProperty("instruction").GetString() == expected.Message && receipt.RootElement.GetProperty("text_fits").GetBoolean(), "5 GHz failures must keep the specific explanation and fit the production controls");
+            }
+        }
+        foreach (var scene in new[] { PreviewScene.WaitingForController, PreviewScene.WaitingForMovement, PreviewScene.PairedDisconnected })
+        {
+            using var form = new MainForm(preview: true);
+            string path = Path.Combine(directory, scene + ".png");
+            form.RenderPreview(scene, path, new Size(440 * form.DeviceDpi / 96, 480 * form.DeviceDpi / 96));
+            using var receipt = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(path, ".json")));
+            var state = receipt.RootElement;
+            bool movement = scene == PreviewScene.WaitingForMovement;
+            Check(state.GetProperty("controller_detected").GetBoolean() == movement && state.GetProperty("waiting_for_movement").GetBoolean() == movement, "Movement instructions require actual controller detection.");
+            Check(state.GetProperty("primary_hidden_for_movement").GetBoolean() == movement && !state.GetProperty("controls_panel_visible").GetBoolean(), "Waiting for a controller must keep the action available and never show active controls.");
+            Check(state.GetProperty("text_fits").GetBoolean() && !state.GetProperty("horizontal_scroll").GetBoolean(), "Both waiting states must fit the smallest supported window.");
+            Check(state.GetProperty("heading").GetString() == (movement ? "Move a joystick" : scene == PreviewScene.WaitingForController ? "Waiting for controller" : "Disconnected"), "Waiting states must describe the actual connection stage.");
+            if (!movement)
+                Check(state.GetProperty("badge").GetString()!.Contains("PAIRING SAVED") && !state.GetProperty("instruction").GetString()!.Contains("joystick"), "Saved pairing alone must not ask for joystick input or imply a wireless connection.");
         }
         return checks;
     }

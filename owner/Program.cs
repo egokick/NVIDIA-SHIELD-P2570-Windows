@@ -40,7 +40,9 @@ internal static partial class Program
     {
         string json = JsonSerializer.Serialize(new { utc = DateTimeOffset.UtcNow, phase,
             transport_ready = currentHost?.TransportReady == true && currentHost?.Stopped != true, connected = currentHost?.XinputSlot is not null && currentHost?.Stopped != true,
-            xinput_slot = currentHost?.XinputSlot, detail });
+            controller_detected = currentHost?.TransportReady == true && currentHost?.ExpectedControllerSession == true && currentHost?.Stopped != true,
+            xinput_slot = currentHost?.XinputSlot,
+            firmware_version = currentHost?.Stopped != true ? currentHost?.FirmwareVersion : null, detail });
         bool success = true;
         try { Console.WriteLine(json); } catch { success = false; }
         if (output is not null)
@@ -77,7 +79,7 @@ internal static partial class Program
         { ssid = c.Ssid; password = c.Passphrase; Band = c.Band; Authentication = c.AuthenticationKind; }
         internal bool Same(NetworkOperatorTetheringAccessPointConfiguration c) => ssid == c.Ssid && password == c.Passphrase && Band == c.Band && Authentication == c.AuthenticationKind;
     }
-    private sealed record Prepared(NetworkOperatorTetheringManager Manager, Configuration Group, PersistentConfig Original, string UplinkAddressState, int[] StartupModes, bool OriginalIdleTimeout, int Band, int Preference, bool SupportsTwo);
+    private sealed record Prepared(NetworkOperatorTetheringManager Manager, Configuration Group, PersistentConfig Original, string UplinkAddressState, int[] StartupModes, bool OriginalIdleTimeout, int Band);
     internal static bool OwnsSuccessfulStart(TetheringOperationStatus status) => status == TetheringOperationStatus.Success;
     internal static bool EmptyHotspot(TetheringOperationalState state, uint clients) => state == TetheringOperationalState.Off && clients == 0;
     private sealed record Settlement<T>(bool HasResult, T? Result, bool Pending, bool CancelCallFailed);
@@ -141,9 +143,7 @@ internal static partial class Program
             throw new InvalidOperationException("Pre-existing hotspot, clients or GO rejected.");
         var apConfig = manager.GetCurrentAccessPointConfiguration();
         bool five = await apConfig.IsBandSupportedAsync(TetheringWiFiBand.FiveGigahertz).AsTask().WaitAsync(TimeSpan.FromSeconds(8));
-        bool two = await apConfig.IsBandSupportedAsync(TetheringWiFiBand.TwoPointFourGigahertz).AsTask().WaitAsync(TimeSpan.FromSeconds(8));
-        int preference = ConnectionSettings.Load();
-        int band = ConnectionSettings.Select(preference, five, two);
+        int band = ConnectionSettings.Select(five);
         if (!await apConfig.IsAuthenticationKindSupportedAsync(TetheringWiFiAuthenticationKind.Wpa2).AsTask().WaitAsync(TimeSpan.FromSeconds(8)))
             throw new InvalidOperationException("WPA2 unsupported.");
         if (Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(ChildPath))) != ChildHash) throw new InvalidOperationException("Data host changed.");
@@ -156,11 +156,11 @@ internal static partial class Program
             hotspot = manager.TetheringOperationalState.ToString(), clients = manager.ClientCount,
             original_band = original.Band.ToString(), original_authentication = original.Authentication.ToString(),
             original_no_connections_timeout_enabled = originalIdleTimeout, idle_policy_setter_called = false,
-            supports_5ghz = five, supports_2_4ghz = two, selected_band = band, supports_wpa2 = true, protected_group_valid = true,
+            supports_5ghz = five, selected_band = band, supports_wpa2 = true, protected_group_valid = true,
             data_host_pin_valid = true, current_configuration_valid = true, service_startup_modes = starts,
             persistent_settings_written = false, ics_snapshot_available = false,
             ics_note = "Mobile Hotspot temporarily uses internet sharing; no global ICS configuration or service setter is called." }, required: true);
-        return new(manager, group, original, ethernet, starts, originalIdleTimeout, band, preference, two);
+        return new(manager, group, original, ethernet, starts, originalIdleTimeout, band);
     }
 
     private static async Task<int> Run(Prepared prepared, CancellationToken cancellation)
@@ -181,7 +181,7 @@ internal static partial class Program
             persistent_configuration_setter_used = false }, required: true);
         var sessionConfig = new NetworkOperatorTetheringSessionAccessPointConfiguration {
             Ssid = prepared.Group.Ssid, Passphrase = prepared.Group.Passphrase,
-            Band = prepared.Band == 5 ? TetheringWiFiBand.FiveGigahertz : TetheringWiFiBand.TwoPointFourGigahertz, AuthenticationKind = TetheringWiFiAuthenticationKind.Wpa2,
+            Band = TetheringWiFiBand.FiveGigahertz, AuthenticationKind = TetheringWiFiAuthenticationKind.Wpa2,
             PerformancePriority = TetheringWiFiPerformancePriority.Default,
         };
         Stopwatch watch = Stopwatch.StartNew();
@@ -202,35 +202,24 @@ internal static partial class Program
             recovery.Save();
             checkpoint = "start-hotspot";
             NetworkOperatorTetheringOperationResult result;
-            while (true)
+            startOperation = manager.StartTetheringAsync(sessionConfig);
+            startTask = startOperation.AsTask();
+            try { result = await startTask.WaitAsync(TimeSpan.FromSeconds(15), cancellation); }
+            catch
             {
-                startOperation = manager.StartTetheringAsync(sessionConfig);
-                startTask = startOperation.AsTask();
-                try { result = await startTask.WaitAsync(TimeSpan.FromSeconds(15), cancellation); }
-                catch
+                var late = await CancelAndSettle(() => startOperation.Cancel(), startTask, TimeSpan.FromSeconds(10));
+                startUnsettled = late.Pending;
+                if (late.HasResult)
                 {
-                    var late = await CancelAndSettle(() => startOperation.Cancel(), startTask, TimeSpan.FromSeconds(10));
-                    startUnsettled = late.Pending;
-                    if (late.HasResult)
-                    {
-                        startStatus = late.Result!.Status.ToString();
-                        owns = OwnsSuccessfulStart(late.Result.Status);
-                    }
-                    Log("start-cancel-settlement", new { pending = late.Pending, cancel_call_failed = late.CancelCallFailed, start_status = startStatus });
-                    throw;
+                    startStatus = late.Result!.Status.ToString();
+                    owns = OwnsSuccessfulStart(late.Result.Status);
                 }
-                if (!ConnectionSettings.RetryOnTwo(prepared.Preference, prepared.Band, prepared.SupportsTwo, (int)result.Status, true)) break;
-                bool empty = EmptyHotspot(manager.TetheringOperationalState, manager.ClientCount) && ChannelInspection.ActiveGroups().Length == 0;
-                if (!ConnectionSettings.RetryOnTwo(prepared.Preference, prepared.Band, prepared.SupportsTwo, (int)result.Status, empty)) break;
-                if (UplinkState() != prepared.UplinkAddressState || !prepared.Original.Same(manager.GetCurrentAccessPointConfiguration()))
-                    throw new InvalidOperationException("Network changed before automatic band selection.");
-                cancellation.ThrowIfCancellationRequested();
-                Log("automatic-band-fallback", new { from_band = 5, to_band = 2, windows_status = result.Status.ToString(), previous_hotspot_off = true });
-                prepared = prepared with { Band = 2 }; sessionConfig.Band = TetheringWiFiBand.TwoPointFourGigahertz;
+                Log("start-cancel-settlement", new { pending = late.Pending, cancel_call_failed = late.CancelCallFailed, start_status = startStatus });
+                throw;
             }
             startStatus = result.Status.ToString();
             owns = OwnsSuccessfulStart(result.Status); // AlreadyOn never establishes ownership.
-            if (!owns) throw new InvalidOperationException("Hotspot start did not return Success.");
+            if (!owns) throw new InvalidOperationException("Windows could not start the requested controller hotspot: " + startStatus);
             started = true;
             recovery.OwnedStart = true; recovery.Save();
             Log("hotspot-started", new { status = startStatus, elapsed_seconds = watch.Elapsed.TotalSeconds });
@@ -240,34 +229,37 @@ internal static partial class Program
             {
                 cancellation.ThrowIfCancellationRequested();
                 var groups = ChannelInspection.ActiveGroups();
-                if (groups.Length > 1) throw new InvalidOperationException("Ambiguous new GO interfaces.");
+                if (groups.Length > 1) throw new FiveGhzRequiredException(FiveGhzFailureReason.AmbiguousGroups, groupCount: groups.Length);
                 if (groups.Length == 1)
                 {
                     try { channel = await Task.Run(() => ChannelInspection.Read(groups[0])).WaitAsync(TimeSpan.FromSeconds(2), cancellation); }
                     catch (InvalidOperationException) { }
+                    catch (TimeoutException) { throw new FiveGhzRequiredException(FiveGhzFailureReason.ChannelQueryTimedOut, groupCount: groups.Length); }
                     if (channel.HasValue) { groupId = groups[0]; break; }
                 }
                 await Task.Delay(250, cancellation);
             }
-            if (!channel.HasValue || !ConnectionSettings.Matches(channel.Value, prepared.Band))
-                throw new InvalidOperationException("Windows selected a channel outside the requested controller band.");
+            int verifiedChannel = channel ?? throw new FiveGhzRequiredException(FiveGhzFailureReason.ChannelUnavailable);
+            ConnectionSettings.RequireFiveGhzChannel(verifiedChannel, 1);
             if (!await Task.Run(() => ChannelInspection.ReadSsidEquals(groupId!.Value, config.Ssid)).WaitAsync(TimeSpan.FromSeconds(2), cancellation))
                 throw new InvalidOperationException("Active hotspot SSID differs from current configuration.");
             Log("channel-verified", new { channel, actual_requested_band = prepared.Band, actual_ssid_matches_configuration = true, hotspot = manager.TetheringOperationalState.ToString() });
             checkpoint = "data-host-session";
-            recovery.Channel = channel.Value; recovery.GroupId = groupId; recovery.GroupMac = GroupMac(groupId!.Value).Select(b => (int)b).ToArray();
+            recovery.Channel = verifiedChannel; recovery.GroupId = groupId; recovery.GroupMac = GroupMac(groupId!.Value).Select(b => (int)b).ToArray();
             recovery.IdleDisablePlanned = prepared.OriginalIdleTimeout; recovery.Save();
             checkpoint = "disable-owned-idle-timeout";
             await idlePolicy.DisableAfterOwnedStart(manager, owns);
             checkpoint = "data-host-session";
-            await RunDataHost(prepared, groupId.Value, channel.Value, hostResult, cancellation);
+            await RunDataHost(prepared, groupId.Value, verifiedChannel, hostResult, cancellation);
             observed = (hostResult.StopRequested && !hostResult.Started) || (hostResult.ExitCode == 0 && hostResult.Stopped && hostResult.VirtualPadRemoved && hostResult.TransportThreadsJoined);
         }
         catch (Exception ex)
         {
-            errorType = ex.GetType().Name; failureCheckpoint = checkpoint;
+            errorType = ex.GetType().Name; failureCheckpoint = ex is FiveGhzRequiredException ? "five-ghz-required" : checkpoint;
             try { failureHotspotState = manager.TetheringOperationalState.ToString(); } catch { }
-            Log("test-error", new { type = errorType, hresult = $"0x{ex.HResult:X8}", checkpoint = failureCheckpoint, hotspot_state = failureHotspotState });
+            var bandFailure = ex as FiveGhzRequiredException;
+            Log("test-error", new { type = errorType, hresult = $"0x{ex.HResult:X8}", checkpoint = failureCheckpoint, hotspot_state = failureHotspotState,
+                band_failure_reason = bandFailure?.ReasonCode, observed_channel = bandFailure?.Channel, active_groups = bandFailure?.GroupCount, start_status = startStatus });
         }
         finally
         {
@@ -344,7 +336,7 @@ internal static partial class Program
 
     private static async Task<int> Main(string[] args)
     {
-        string mode = "plan", configPath = PrivateFiles.Config, directory = "", targetHash = "";
+        string mode = "plan", configPath = PrivateFiles.Config, directory = "", targetHash = "", importPath = "";
         Guid setupWifi = Guid.Empty, setupUplink = Guid.Empty;
         int parentPid = 0; ulong parentCreation = 0;
         var seen = new HashSet<string>();
@@ -361,16 +353,19 @@ internal static partial class Program
                     case "--wifi-guid": if (!Guid.TryParse(args[i + 1], out setupWifi)) throw new ArgumentException(); break;
                     case "--uplink-guid": if (!Guid.TryParse(args[i + 1], out setupUplink)) throw new ArgumentException(); break;
                     case "--target-id-hash": targetHash = args[i + 1]; break;
+                    case "--import": importPath = args[i + 1]; break;
                     case "--parent-pid": if (!int.TryParse(args[i + 1], out parentPid)) throw new ArgumentException(); break;
                     case "--parent-creation-filetime": if (!ulong.TryParse(args[i + 1], out parentCreation)) throw new ArgumentException(); break;
                     default: throw new ArgumentException("Unknown option.");
                 }
             }
-            if (mode is not ("plan" or "capabilities" or "discover" or "pair" or "forget" or "validate" or "run" or "recover" or "selftest")) throw new ArgumentException("Unknown mode.");
-            if (mode is not ("discover" or "pair") && (setupWifi != Guid.Empty || setupUplink != Guid.Empty || targetHash.Length != 0)) throw new ArgumentException("Setup flags only apply to Discover/Pair.");
-            if (mode == "plan") { Log("plan", new { activation = false, modes = new[] { "capabilities", "discover", "pair", "forget", "validate", "run", "recover", "selftest" }, lifetime = "Explicit Start until launcher exits or Stop is requested.", band_preference = "auto-prefer-5ghz" }); return 0; }
+            if (mode is not ("plan" or "installation-check" or "capabilities" or "discover" or "pair" or "import-pairing" or "forget" or "validate" or "run" or "recover" or "selftest")) throw new ArgumentException("Unknown mode.");
+            if (mode is not ("discover" or "pair" or "import-pairing") && (setupWifi != Guid.Empty || setupUplink != Guid.Empty || targetHash.Length != 0)) throw new ArgumentException("Adapter flags only apply to setup/import.");
+            if (mode != "import-pairing" && importPath.Length != 0) throw new ArgumentException("Import path only applies to Import Pairing.");
+            if (mode == "plan") { Log("plan", new { activation = false, modes = new[] { "capabilities", "discover", "pair", "import-pairing", "forget", "validate", "run", "recover", "selftest" }, lifetime = "Explicit Start until launcher exits or Stop is requested.", band_preference = "5ghz-only" }); return 0; }
             if (mode == "selftest") return await SelfTest();
             if (mode == "capabilities") return await Capabilities();
+            if (mode == "installation-check") return await Capabilities(installationOnly: true);
             if (!PrivateFiles.SamePath(configPath, PrivateFiles.Config)) throw new ArgumentException("Use the installed current configuration.");
             package = PackageManifest.Load();
             using var ownerLock = RecoveryState.AcquireOwnerLock();
@@ -381,6 +376,12 @@ internal static partial class Program
             }
             if (mode == "recover" && File.Exists(SetupActive)) return await RecoverSetup();
             if (File.Exists(SetupActive)) { checkpoint = "setup-recovery-required"; throw new InvalidOperationException("Unresolved setup state. Use explicit Recover."); }
+            if (mode == "import-pairing")
+            {
+                if (importPath.Length == 0 || setupWifi == Guid.Empty || setupUplink == Guid.Empty || targetHash.Length != 0 || directory.Length != 0 || parentPid != 0 || parentCreation != 0)
+                    throw new ArgumentException("Import needs a private export and local adapter identifiers only.");
+                return ImportPairing(importPath, setupWifi, setupUplink);
+            }
             if (mode is "discover" or "pair")
             {
                 if (File.Exists(PrivateFiles.Recovery)) throw new InvalidOperationException("Recover the previous controller session first.");
@@ -416,20 +417,26 @@ internal static partial class Program
         }
         catch (Exception ex)
         {
+            if (ex is FiveGhzRequiredException) checkpoint = "five-ghz-required";
+            var bandFailure = ex as FiveGhzRequiredException;
             Log("failed", new { type = ex.GetType().Name, hresult = $"0x{ex.HResult:X8}", checkpoint,
+                band_failure_reason = bandFailure?.ReasonCode, observed_channel = bandFailure?.Channel, active_groups = bandFailure?.GroupCount,
                 message = FailureHelp(checkpoint), recovery_required = File.Exists(PrivateFiles.Recovery) || File.Exists(SetupActive) });
             launcher?.Dispose(); return 2;
         }
     }
     private static string FailureHelp(string stage) => stage switch {
+        "five-ghz-required" => ConnectionSettings.FiveGhzOnlyMessage,
+        "pairing-network-unavailable" => "Windows could not verify the temporary pairing network. Pairing may use 2.4 GHz or 5 GHz; controller input still requires 5 GHz.",
+        "setup-interface-changed" => "The Wi-Fi or Internet connection changed. Restore the selected adapters, then check setup again.",
         "setup-single-radio" => "First pairing requires exactly one enabled Wi-Fi adapter. Select that adapter and an Internet connection.",
         "selected-target" => "Discover and select the controller again. Existing pending credentials are retained; a different controller requires explicit setup replacement.",
-        "pairing-bootstrap-channel" => "Windows selected an unsupported pairing channel, or the selected Internet connection changed. Supported channels are 1-11 and 36/40/44/48.",
+        "pairing-bootstrap-channel" => ConnectionSettings.FiveGhzOnlyMessage,
         "setup-recovery-required" => "A previous setup did not prove cleanup. Use Recover; if a hotspot remains active, turn it off in Windows first.",
         "pairing-required" => "Complete guided pairing before starting the controller.",
         "forget-controller" => "Stop the controller and Windows hotspot, resolve any pending recovery, and keep a network connected before forgetting saved pairing.",
         "read-only-preflight" => "Check Windows 11 24H2, Wi-Fi/Location access, an active Internet connection, installed drivers, and that Mobile Hotspot is off.",
-        "verify-channel" => "Windows did not create the requested controller band. Try Automatic or 2.4 GHz in Settings, and close other hotspot activity.",
+        "verify-channel" => ConnectionSettings.FiveGhzOnlyMessage,
         "argument-validation" => "Check the installed package and command arguments.",
         _ => "The controller operation stopped at the reported checkpoint. Check the local session receipt before retrying."
     };

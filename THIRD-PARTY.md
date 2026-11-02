@@ -14,6 +14,10 @@ The complete license is included as `LICENSE`.
   disabled payload tracing, and supervised lifetime. It does not forward
   headset audio, microphone or rumble output.
 - `data-host/src/mapping.rs` retains the upstream controller-to-XInput mapping.
+- `data-host/src/firmware.rs` implements the P2570 firmware response layout
+  documented and checked against NVIDIA's display in upstream
+  `shdlib/src/firmware.rs`, commit `9eb7f473c9b12c1190a4250463a99b3bf6fdfc37`.
+  No additional dependency or firmware binary is included.
 - The independently implemented Nova Pro Wireless volume control uses protocol
   facts documented in [GGWP's findings](https://github.com/hughes/GGWP/blob/main/FINDINGS.md).
   Only the settings query and bounded headphone-volume command are used; no

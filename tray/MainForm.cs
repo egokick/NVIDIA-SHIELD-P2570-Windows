@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace ShieldController;
 
-internal enum PreviewScene { NotPaired, Pairing, Provisioning, PairedDisconnected, Connected, ConnectedMappingsCustom, ConnectedStickAdvanced, Error, MissingDriver, Recovery, MultipleControllers, Settings, Help, NoController, Connecting, RestartRequired, InstallFailed, NetworkChoice, LocationPermission, WifiOff }
+internal enum PreviewScene { NotPaired, Pairing, Provisioning, PairedDisconnected, Connected, ConnectedMappingsCustom, ConnectedStickAdvanced, Error, MissingDriver, Recovery, MultipleControllers, Settings, Help, NoController, Connecting, RestartRequired, InstallFailed, NetworkChoice, LocationPermission, WifiOff, Firmware, FirmwareUnknown, FirmwareObserved, FirmwareChanges, FirmwareUncatalogued, FiveGhzRequired, WaitingForController, WaitingForMovement }
 
 internal sealed class MainForm : Form
 {
@@ -18,10 +18,11 @@ internal sealed class MainForm : Form
     private readonly ChoicePicker wifi = new("Choose Wi-Fi"), candidates = new("Choose your controller");
     private AdapterChoice? selectedUplink;
     private readonly Button disconnect = new(), refresh = new(), forget = new();
-    private readonly ChoicePicker band = new("Choose a band");
-    private readonly Label bandHint = TextLabel("Automatic uses 5 GHz when available, otherwise 2.4 GHz.", 9);
     private readonly ToolStripMenuItem trayConnect = new("Connect"), trayPair = new("Pair controller…"), trayForget = new("Forget controller…");
     private readonly SetupScrollPanel home = new(), settings = new(), help = new();
+    private readonly SetupScrollPanel firmware = new();
+    private readonly FirmwarePanel firmwarePanel;
+    private readonly Label firmwareSummary = TextLabel("Connect to read the controller firmware.", 10);
     private readonly TableLayoutPanel page = new();
     private readonly Panel homeContent = new();
     private readonly ControlMappingsPanel controlMappings;
@@ -34,6 +35,7 @@ internal sealed class MainForm : Form
     private bool busy, exiting, allowClose, automaticConnectAttempted, searchEmpty, previewRunning, restartRequired;
     private TaskCompletionSource? activeWork;
     private string progress = "Checking";
+    private FiveGhzFailureText? bandFailure;
     private Capabilities? capabilities;
     private NextAction nextAction;
     private readonly System.Windows.Forms.Timer stateTimer = new() { Interval = 1000 };
@@ -44,16 +46,22 @@ internal sealed class MainForm : Form
     internal MainForm(bool preview = false)
     {
         this.preview = preview;
+        SuspendLayout();
+        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleMode = AutoScaleMode.Dpi;
         Text = "SHIELD Controller";
         Font = new Font("Segoe UI", 11);
         BackColor = Palette.Background; ForeColor = Palette.Ink;
         ClientSize = new Size(520, 650); MinimumSize = new Size(440, 480);
         StartPosition = FormStartPosition.CenterScreen;
-        ShowInTaskbar = !preview; Icon = appIcon; AutoScaleMode = AutoScaleMode.Dpi;
+        ShowInTaskbar = !preview; Icon = appIcon;
         var (controls, controlsNeedReset) = LoadControlProfile(preview ? ProfileStore.Defaults : ProfileStore.Load);
         controlMappings = new ControlMappingsPanel(controls, SaveControls) { Visible = false };
         if (controlsNeedReset) controlMappings.SetSaveStatus("Saved controls could not load. Use Reset to repair them.", error: true);
         if (preview) controlMappings.SetCalibration("32″ · 2560 × 1440", "Calibrated for this display · 100% is the recommended starting point.");
+        firmwarePanel = new FirmwarePanel(() => ShowPage(settings), OpenUrl);
+        firmware.Dock = DockStyle.Fill; firmware.AutoScroll = true; firmware.BackColor = BackColor;
+        firmware.Controls.Add(firmwarePanel); Controls.Add(firmware);
         BuildHome(); BuildSettings(); BuildHelp(); ShowPage(home);
         controlMappings.ContentHeightChanged += (_, _) => LayoutHome();
         if (!preview)
@@ -63,6 +71,7 @@ internal sealed class MainForm : Form
             menu.Items.Add(trayConnect); trayConnect.Click += async (_, _) => await ConnectClick();
             menu.Items.Add(trayPair); trayPair.Click += (_, _) => { ShowPage(home); ShowWindow(); primary.Focus(); };
             menu.Items.Add("Settings…", null, (_, _) => { ShowPage(settings); ShowWindow(); });
+            menu.Items.Add("Controller firmware…", null, (_, _) => { ShowPage(firmware); ShowWindow(); });
             menu.Items.Add("Test controller…", null, (_, _) => TestController());
             menu.Items.Add(trayForget); trayForget.Click += async (_, _) => await ForgetClick();
             menu.Items.Add(new ToolStripSeparator());
@@ -71,7 +80,7 @@ internal sealed class MainForm : Form
             tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowWindow(); };
             owner.SessionEvent += e => Ui(() => { model.ApplySession(e); ApplyState(); });
             owner.SessionFailed += () => Ui(() => { model.Fail("The connection needs another try."); ApplyState(); });
-            owner.SessionEnded += code => Ui(() => { if (code == 0) model.SetDisconnected(); else model.Fail("We couldn't connect. Try again."); ApplyState(); });
+            owner.SessionEnded += code => Ui(() => { bandFailure = owner.SessionBandFailure; if (code == 0) model.SetDisconnected(); else model.Fail(owner.SessionFailureMessage ?? "We couldn't connect. Try again."); ApplyState(); });
             Shown += async (_, _) => await RefreshCapabilities(autoConnect: true);
             stateTimer.Tick += (_, _) => { ApplyState(); RefreshCalibrationIfNeeded(); }; stateTimer.Start();
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged += DisplaySettingsChanged;
@@ -87,6 +96,7 @@ internal sealed class MainForm : Form
         }
         FormClosing += (_, e) => { if (!allowClose && !preview) { e.Cancel = true; Hide(); } };
         ApplyState();
+        ResumeLayout(true);
     }
     internal static (ControlProfile Profile, bool NeedsReset) LoadControlProfile(Func<ControlProfile> load)
     {
@@ -122,9 +132,10 @@ internal sealed class MainForm : Form
         foreach (float height in new[] { 48f, 32, 50, 54, -1, 0, 58, 32, 40, 0 })
             page.RowStyles.Add(new RowStyle(height == -1 ? SizeType.Percent : SizeType.Absolute, height == -1 ? 100 : height));
         var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
+        header.RowCount = 1; header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
         header.Controls.Add(TextLabel("SHIELD  /  P2570", 12, true), 0, 0);
-        var settingsLink = Link("Settings", () => ShowPage(settings)); settingsLink.Anchor = AnchorStyles.Right; settingsLink.Margin = Padding.Empty;
+        var settingsLink = Link("Settings", () => ShowPage(settings)); settingsLink.AutoSize = false; settingsLink.Dock = DockStyle.Fill; settingsLink.TextAlign = ContentAlignment.MiddleRight; settingsLink.Margin = Padding.Empty;
         header.Controls.Add(settingsLink, 1, 0); page.Controls.Add(header, 0, 0);
         badge.Dock = DockStyle.Fill; badge.Margin = Padding.Empty; badge.Font = new Font("Segoe UI Semibold", 10); badge.ForeColor = Palette.Muted; badge.TextAlign = ContentAlignment.MiddleLeft; page.Controls.Add(badge, 0, 1);
         headline.Dock = DockStyle.Fill; headline.Margin = Padding.Empty; headline.Font = titleFont; headline.UseMnemonic = false; headline.TextAlign = ContentAlignment.MiddleLeft; page.Controls.Add(headline, 0, 2);
@@ -144,7 +155,7 @@ internal sealed class MainForm : Form
     {
         if (homeContent.IsDisposed) return;
         float scale = DeviceDpi / 96f; int S(int n) => (int)Math.Round(n * scale);
-        int width = Math.Max(S(350), home.ClientSize.Width), height;
+        int width = home.ClientSize.Width, height;
         bool wide = connectedLayout && width >= S(850);
         if (connectedLayout && wide)
         {
@@ -167,6 +178,15 @@ internal sealed class MainForm : Form
             page.RowStyles[item.Item1].Height = S(item.Item2);
         if (waitingForMovement) page.RowStyles[6].Height = 0;
         headline.Font = page.Width < S(470) ? compactTitleFont : titleFont;
+        int textWidth = Math.Max(1, page.Width - page.Padding.Horizontal);
+        var flags = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl;
+        page.RowStyles[2].Height = Math.Max(page.RowStyles[2].Height, TextRenderer.MeasureText(headline.Text, headline.Font, new Size(textWidth, int.MaxValue), flags).Height + S(6));
+        page.RowStyles[3].Height = Math.Max(S(54), TextRenderer.MeasureText(instruction.Text, instruction.Font, new Size(textWidth, int.MaxValue), flags).Height + S(8));
+        if (!connectedLayout)
+        {
+            int required = (int)Math.Ceiling(page.RowStyles.Cast<RowStyle>().Where(row => row.SizeType == SizeType.Absolute).Sum(row => row.Height)) + page.Padding.Vertical + S(120);
+            if (height < required) { page.Height = required; homeContent.Height = required; home.AutoScrollMinSize = new Size(0, required); }
+        }
     }
     private void SetConnectedLayout(bool connected)
     {
@@ -232,19 +252,12 @@ internal sealed class MainForm : Form
     }
     private void BuildSettings()
     {
-        var layout = SecondaryPage(settings, "Settings", 660);
+        var layout = SecondaryPage(settings, "Settings", 750);
         AddRow(layout, TextLabel("Your connection is chosen automatically."), 42);
         AddRow(layout, TextLabel("Controller Wi-Fi", 10, true), 28); StylePicker(wifi); AddRow(layout, wifi, 42);
-        AddRow(layout, TextLabel("Controller Wi-Fi band", 10, true), 30); StylePicker(band); AddRow(layout, band, 42);
-        band.SetItems(ConnectionSettings.Choices);
-        try { band.SelectedIndex = preview ? 0 : ConnectionSettings.Load(); }
-        catch { bandHint.Text = "Saved band could not load. Choose a band to repair it."; }
-        band.SelectedIndexChanged += (_, _) => {
-            if (preview || band.SelectedIndex < 0) return;
-            try { OwnerClient.CreatePrivateDirectory(OwnerClient.Root); ConnectionSettings.Save(band.SelectedIndex); bandHint.Text = Running ? "Saved. Disconnect and connect to use this band." : "Saved. Used when you connect your controller."; }
-            catch { bandHint.Text = "Could not save. Choose the band again to retry."; }
-        };
-        AddRow(layout, bandHint, 52);
+        AddRow(layout, TextLabel("Controller input band", 10, true), 30);
+        AddRow(layout, TextLabel("5 GHz only", 12, true), 42);
+        AddRow(layout, TextLabel("Temporary pairing can use 2.4 or 5 GHz.\n" + ConnectionSettings.SupportedChannelsMessage, 9), 52);
         wifi.SelectedIndexChanged += (_, _) => { candidates.SetItems([]); searchEmpty = false; ApplyState(); };
         requirements.Dock = DockStyle.Fill; requirements.Margin = new Padding(0, 14, 0, 0); requirements.ForeColor = Palette.Muted; AddRow(layout, requirements, 62);
         detail.Dock = DockStyle.Fill; detail.ForeColor = Palette.Muted; detail.Font = new Font("Segoe UI", 9); AddRow(layout, detail, 64);
@@ -254,6 +267,8 @@ internal sealed class MainForm : Form
         disconnect.Text = "Disconnect"; disconnect.Click += async (_, _) => await ConnectClick();
         refresh.Text = "Check setup"; refresh.Click += async (_, _) => await RefreshCapabilities(); actions.Controls.Add(disconnect, 0, 0); actions.Controls.Add(refresh, 1, 0); AddRow(layout, actions, 46);
         forget.Text = "Forget controller…"; forget.Click += async (_, _) => await ForgetClick(); AddRow(layout, forget, 44);
+        AddRow(layout, Link("Controller firmware…", () => ShowPage(firmware)), 40);
+        AddRow(layout, firmwareSummary, 48);
         var links = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = new Padding(0, 6, 0, 0) };
         links.Controls.Add(Link("Open logs", OpenLogs)); links.Controls.Add(Link("Project & help", () => OpenUrl("https://github.com/egokick/NVIDIA-SHIELD-P2570-Windows"))); AddRow(layout, links, 44);
     }
@@ -268,7 +283,7 @@ internal sealed class MainForm : Form
     }
     private void ShowPage(SetupScrollPanel selected)
     {
-        foreach (var surface in new[] { home, settings, help }) surface.Visible = surface == selected;
+        foreach (var surface in new[] { home, settings, help, firmware }) surface.Visible = surface == selected;
         selected.BringToFront(); selected.AutoScrollPosition = Point.Empty;
         AcceptButton = selected == home ? primary : null;
     }
@@ -279,12 +294,13 @@ internal sealed class MainForm : Form
     }
     private void ApplyState()
     {
+        firmwarePanel.UpdateStatus(model.FirmwareVersion, model.TransportReady);
+        firmwareSummary.Text = model.FirmwareVersion is string version ? "Installed: v" + version : "Connect to read the controller firmware.";
         bool locked = busy || owner.CommandPending || exiting;
-        waitingForMovement = !locked && Ready && model.State == ControllerState.PairedDisconnected && Running && model.TransportReady;
+        waitingForMovement = !locked && Ready && model.State == ControllerState.PairedDisconnected && Running && model.ControllerDetected;
         primary.Visible = !waitingForMovement;
         AcceptButton = waitingForMovement ? null : primary;
-        band.Enabled = !locked;
-        badge.Text = model.State == ControllerState.Connected ? "●  CONNECTED WIRELESSLY" : waitingForMovement ? "✓  PAIRED · ONE LAST STEP" : model.Paired ? (Running && !model.TransportReady ? "●  CONNECTING" : "○  DISCONNECTED · PAIRING SAVED") : "○  FIRST SETUP";
+        badge.Text = model.State == ControllerState.Connected ? "●  CONNECTED WIRELESSLY" : waitingForMovement ? "●  CONTROLLER DETECTED" : model.Paired ? (Running && !model.TransportReady ? "●  CONNECTING" : "○  PAIRING SAVED · NOT CONNECTED") : "○  FIRST SETUP";
         badge.ForeColor = model.State == ControllerState.Connected || waitingForMovement ? Color.FromArgb(49, 111, 29) : Palette.Muted;
         if (tray is not null) tray.Text = "SHIELD · " + StatusModel.Title(model.State);
         bool multiple = candidates.Items.Count > 1 && !model.Paired && !locked;
@@ -302,6 +318,8 @@ internal sealed class MainForm : Form
             Present("A quick fix first.", "The last connection didn't finish closing.\nLet's put it right.", "Fix connection", NextAction.Recover, IllustrationMode.Error);
         else if (restartRequired)
             Present("Nearly there.", "The driver is installed.\nRestart your PC to finish setup.", "Close", NextAction.Hide, IllustrationMode.Error, "Your progress is saved.");
+        else if (model.State == ControllerState.Error && bandFailure is not null && model.Message == bandFailure.Message)
+            Present(bandFailure.Heading, model.Message, "Check setup", NextAction.Retry, IllustrationMode.Error, ConnectionSettings.SupportedChannelsMessage);
         else if (model.State == ControllerState.Error)
             Present(model.Paired ? "Disconnected" : "Setup needs attention", model.Paired ? "Your pairing is saved.\nConnect to use your controller again." : model.Message, model.Paired ? "Connect" : "Check setup", NextAction.Retry, IllustrationMode.Error, model.Paired ? "Pairing saved · controller input is not active" : "Open Help below if you need a hand.");
         else if (capabilities?.Requirements.FirstOrDefault(r => !r.Available) is Requirement missing)
@@ -310,7 +328,7 @@ internal sealed class MainForm : Form
             (string text, string action, NextAction next) = missing.Id switch {
                 "architecture" => ("This release needs an Intel or AMD PC.\nWindows on ARM isn't supported yet.", "Close", NextAction.Hide),
                 "npcap" or "vigem" => ("Let's finish the tools your controller needs.\nApprove the setup prompts when asked.", "Finish setup", NextAction.InstallDrivers),
-                "location" => ("Windows needs permission to use Wi-Fi.\nTurn on Location access, then come back.", "Allow Wi-Fi access", NextAction.LocationSettings),
+                "location" => ("Windows protects Wi-Fi discovery with Location permission.\nAllow access in Windows Settings to pair.", "Allow Wi-Fi access", NextAction.LocationSettings),
                 "wifi" => ("Turn on your PC's Wi-Fi.\nWe'll check again when you come back.", "Open Wi-Fi settings", NextAction.WifiSettings),
                 "pairing-radio" => ("Keep just one Wi-Fi adapter turned on.\nThen check again.", "Check again", NextAction.Retry),
                 "uplink" => ("Connect your PC to the internet.\nAn Ethernet cable works best.", "Open network settings", NextAction.InternetSettings),
@@ -332,7 +350,14 @@ internal sealed class MainForm : Form
         else if (model.State == ControllerState.Connected)
             Present("Connected", "Open your game.\nYour controller is connected wirelessly.", "Hide to tray", NextAction.Hide, IllustrationMode.Connected, "Closing this window keeps your controller connected.");
         else if (Running)
-            Present(model.TransportReady ? "Move a joystick" : "Connecting…", model.TransportReady ? "Tilt either stick left and right.\nWe'll connect automatically." : "Getting your wireless connection ready.", "Hide to tray", NextAction.Hide, model.TransportReady ? IllustrationMode.MoveStick : IllustrationMode.Error, model.TransportReady ? "Waiting for joystick movement…" : "Your pairing is saved.");
+        {
+            if (model.ControllerDetected)
+                Present("Move a joystick", "Tilt either stick left and right.\nWaiting for the first joystick input.", "Hide to tray", NextAction.Hide, IllustrationMode.MoveStick, "Controller detected · waiting for joystick movement…");
+            else if (model.TransportReady)
+                Present("Waiting for controller", "Your pairing is saved.\nThe controller hasn't connected wirelessly yet.", "Hide to tray", NextAction.Hide, IllustrationMode.Error, "Keep it nearby with USB unplugged.");
+            else
+                Present("Connecting…", "Getting your wireless connection ready.", "Hide to tray", NextAction.Hide, IllustrationMode.Error, "Your pairing is saved.");
+        }
         else
             Present("Disconnected", "Your pairing is saved.\nChoose Connect to use your controller.", "Connect", NextAction.Connect, IllustrationMode.Error, "Your pairing is saved on this PC.");
         primary.Enabled = !locked && nextAction != NextAction.None && (!multiple || candidates.SelectedItem is Candidate);
@@ -370,13 +395,14 @@ internal sealed class MainForm : Form
     {
         if (preview || busy || exiting || owner.CommandPending) return;
         var finished = activeWork = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        busy = true; ApplyState();
+        bandFailure = null; busy = true; ApplyState();
         try { await operation(); }
         catch (OperationCanceledException) when (exiting) { }
         catch (Exception e)
         {
             candidates.SetItems([]);
-            model.Fail(!File.Exists(OwnerClient.Executable) ? "The app needs to be installed again." : e is TimeoutException ? "Setup is still finishing. Please wait a moment." : "That didn't work. Try again, or open Help.");
+            bandFailure = (e as OwnerCommandException)?.BandFailure;
+            model.Fail(!File.Exists(OwnerClient.Executable) ? "The app needs to be installed again." : e is OwnerCommandException ? e.Message : e is TimeoutException ? "Setup is still finishing. Please wait a moment." : "That didn't work. Try again, or open Help.");
         }
         finally { busy = false; ApplyState(); finished.TrySetResult(); }
     }
@@ -512,17 +538,35 @@ internal sealed class MainForm : Form
     {
         if (viewport is Size size) Size = size;
         else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced) ClientSize = new Size(1040, 820);
-        bool paired = scene is PreviewScene.PairedDisconnected or PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced or PreviewScene.Connecting or PreviewScene.Recovery or PreviewScene.Settings;
+        previewRunning = false;
+        bool paired = scene is PreviewScene.PairedDisconnected or PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced or PreviewScene.Connecting or PreviewScene.WaitingForController or PreviewScene.WaitingForMovement or PreviewScene.Recovery or PreviewScene.Settings or PreviewScene.FiveGhzRequired;
         ApplyCapabilities(new(paired, scene == PreviewScene.Recovery,
             [new("windows", "Windows 11 24H2 or newer", true), new("npcap", "Npcap connection tool", scene is not (PreviewScene.MissingDriver or PreviewScene.RestartRequired or PreviewScene.InstallFailed)),
              new("vigem", "ViGEmBus gamepad driver", true), new("package", "Application files", true), new("location", "Windows Wi-Fi permission", scene != PreviewScene.LocationPermission), new("wifi", "Wi-Fi available", scene != PreviewScene.WifiOff),
              new("pairing-radio", "One enabled Wi-Fi adapter", true), new("uplink", "Active internet connection", true)],
             [new("preview", "Wi-Fi")], [new("preview", "Ethernet")], "preview", "preview"));
         if (scene is PreviewScene.Pairing or PreviewScene.Provisioning) { model.BeginPairing(); busy = true; progress = scene == PreviewScene.Pairing ? "Searching" : "Pairing"; }
-        else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced or PreviewScene.PairedDisconnected or PreviewScene.Connecting)
+        else if (scene is PreviewScene.Firmware or PreviewScene.FirmwareObserved or PreviewScene.FirmwareChanges or PreviewScene.FirmwareUncatalogued)
+        {
+            model.PairSucceeded(); previewRunning = true;
+            using var firmwareEvent = JsonDocument.Parse(JsonSerializer.Serialize(new { connected = true, transport_ready = true, controller_detected = true,
+                firmware_version = scene == PreviewScene.FirmwareUncatalogued ? "1.91/81/3.71/0.32" : "1.96/99/3.71/0.32" }));
+            model.ApplySession(firmwareEvent.RootElement);
+        }
+        else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced or PreviewScene.Connecting or PreviewScene.WaitingForController or PreviewScene.WaitingForMovement)
         {
             previewRunning = true;
-            using var e = JsonDocument.Parse(scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced ? "{\"connected\":true,\"transport_ready\":true}" : scene == PreviewScene.Connecting ? "{}" : "{\"transport_ready\":true}"); model.ApplySession(e.RootElement);
+            using var e = JsonDocument.Parse(JsonSerializer.Serialize(new {
+                connected = scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced,
+                transport_ready = scene != PreviewScene.Connecting,
+                controller_detected = scene is not (PreviewScene.Connecting or PreviewScene.WaitingForController)
+            }));
+            model.ApplySession(e.RootElement);
+        }
+        else if (scene == PreviewScene.FiveGhzRequired)
+        {
+            bandFailure = ConnectionSettings.DescribeFiveGhzFailure("observed-2.4-ghz", 11, supportsFive: true, pairing: false);
+            model.Fail(bandFailure.Message);
         }
         else if (scene == PreviewScene.Error) model.Fail("That didn't work. Try again, or open Help.");
         else if (scene == PreviewScene.InstallFailed) model.Fail("The installer didn't finish. Please try again.");
@@ -541,10 +585,20 @@ internal sealed class MainForm : Form
         }
         if (scene == PreviewScene.ConnectedStickAdvanced) controlMappings.ExpandStickOptions();
         if (scene == PreviewScene.Settings) ShowPage(settings); else if (scene == PreviewScene.Help) ShowPage(help);
+        bool firmwareScene = scene is PreviewScene.Firmware or PreviewScene.FirmwareUnknown or PreviewScene.FirmwareObserved or PreviewScene.FirmwareChanges or PreviewScene.FirmwareUncatalogued;
+        if (firmwareScene)
+        {
+            ShowPage(firmware);
+            if (scene == PreviewScene.FirmwareObserved) firmwarePanel.Select("observed-ozmo-81");
+            if (scene == PreviewScene.FirmwareChanges) firmwarePanel.Select("tablet-3.0-update");
+            if (scene == PreviewScene.FirmwareUncatalogued) firmwarePanel.Select("detected");
+        }
         static void PrepareControl(Control c) { _ = c.Handle; c.PerformLayout(); foreach (Control child in c.Controls) PrepareControl(child); }
         PrepareControl(this); LayoutHome(); PerformLayout(); PrepareControl(this); PerformLayout();
+        if (scene is PreviewScene.FirmwareObserved or PreviewScene.FirmwareChanges or PreviewScene.FirmwareUncatalogued)
+            firmwarePanel.OpenEntry(firmwarePanel.Selected.Id);
         using var bitmap = new Bitmap(Width, Height); DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(path);
-        var active = scene == PreviewScene.Settings ? settings : scene == PreviewScene.Help ? help : home;
+        var active = firmwareScene ? firmware : scene == PreviewScene.Settings ? settings : scene == PreviewScene.Help ? help : home;
         string? scrolledPath = null;
         string? controlsPath = null;
         if (active.VerticalScroll.Visible)
@@ -561,8 +615,12 @@ internal sealed class MainForm : Form
         if (scene == PreviewScene.ConnectedMappingsCustom)
             controlMappings.MappingRows.Single(row => row.Id == "y").RenderChoicesPreview(Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path) + "-actions.png"));
         File.WriteAllText(Path.ChangeExtension(path, ".json"), JsonSerializer.Serialize(new { scene = scene.ToString(), state = model.State.ToString(), capture = "WinForms DrawToBitmap of production controls", visible = Visible, show_in_taskbar = ShowInTaskbar,
-            owner_or_radio_calls = 0, dimensions = new { width = bitmap.Width, height = bitmap.Height }, heading = headline.Text, instruction = instruction.Text, badge = badge.Text, illustration = illustration.Mode.ToString(), waiting_for_movement = waitingForMovement, primary_action = primary.Text, primary_enabled = primary.Enabled, primary_hidden_for_movement = waitingForMovement,
+            dpi = DeviceDpi, horizontal_scroll = active.HorizontalScroll.Visible,
+            text_fits = new[] { headline, instruction }.All(label => TextRenderer.MeasureText(label.Text, label.Font, new Size(label.ClientSize.Width, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl).Height <= label.ClientSize.Height),
+            owner_or_radio_calls = 0, dimensions = new { width = bitmap.Width, height = bitmap.Height }, heading = headline.Text, instruction = instruction.Text, badge = badge.Text, illustration = illustration.Mode.ToString(), controller_detected = model.ControllerDetected, waiting_for_movement = waitingForMovement, primary_action = primary.Text, primary_enabled = primary.Enabled, primary_hidden_for_movement = waitingForMovement,
             candidate_selection_visible = candidates.Visible, candidate_selected = candidates.SelectedItem is not null, settings_visible = scene == PreviewScene.Settings,
+            firmware_visible = firmwareScene, firmware_version = model.FirmwareVersion, firmware_entry = firmwarePanel.Selected.Id,
+            firmware_text_fits = firmwarePanel.TextFits, firmware_details_visible = firmwarePanel.IsShowingDetails,
             controls_panel_visible = connectedLayout, mapping_rows = connectedLayout ? ProfileStore.ControlIds.Length : 0,
             controls_capture = controlsPath is not null,
             selected_wifi = wifi.SelectedItem?.ToString(), selected_uplink = selectedUplink?.ToString(), scrolled_capture = scrolledPath is not null,

@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use crate::firmware::{FirmwareVersion, VERSION_CMD};
 use ozproto::Host;
 use ozproto::usb::{self, Message, Request};
 use tracing::{debug, info, warn};
@@ -32,7 +33,7 @@ const SETUP: [&str; 14] = [
     "SET_REPORT feature 0xFD=01",
     "GET_REPORT feature 0xFD (status)",
     "SET_REPORT feature 0xFD=08",
-    "GET_REPORT feature 0xFD (version?)",
+    "GET_REPORT feature 0xFD (firmware version)",
     "SET_REPORT feature 0xFD=0D",
     "GET_REPORT feature 0xFD (0D)",
 ];
@@ -102,7 +103,7 @@ fn setup_request(step: usize, req_id: u8) -> Request {
         5 => Request::hid_get_report(req_id, HID_INTERFACE, usb::REPORT_FEATURE, 0xFC),
         6 => set(0x0A),
         8 => set(STATUS_CMD),
-        10 => set(0x08),
+        10 => set(VERSION_CMD),
         12 => set(0x0D),
         _ => Request::hid_get_report(req_id, HID_INTERFACE, usb::REPORT_FEATURE, MAILBOX),
     }
@@ -234,6 +235,7 @@ impl Report {
 //endregion
 
 pub struct Controller {
+    firmware: Option<FirmwareVersion>,
     step: usize,
     last_req_id: u8,
     /// Request in flight: ID, when it went out, how many times
@@ -281,6 +283,7 @@ impl Controller {
     /// it, it idles between inputs and goes silent for up to ~2 s at a time.
     pub fn new(mic: bool) -> Self {
         Controller {
+            firmware: None,
             step: 0,
             last_req_id: 0,
             pending: None,
@@ -350,6 +353,11 @@ impl Controller {
     /// True once the setup sequence has run; input reports follow shortly.
     pub fn ready(&self) -> bool {
         self.ready
+    }
+
+    /// Read only from the version request's successful reply in this session.
+    pub fn firmware(&self) -> Option<FirmwareVersion> {
+        self.firmware
     }
 
     /// Starts the setup sequence on a fresh session.
@@ -599,6 +607,9 @@ impl Controller {
                 && SETUP[self.step].starts_with("GET_REPORT feature 0xFD")
             {
                 info!(req = SETUP[self.step], data = %"<redacted>", "mailbox");
+                if self.step == 11 {
+                    self.firmware = FirmwareVersion::decode(data);
+                }
                 if data.first() == Some(&STATUS_CMD) {
                     self.log_status(now, data);
                 }
@@ -809,6 +820,38 @@ mod tests {
             alt: 1,
         };
         assert_eq!(mic.encode(0x13), hex("3106011305130301"));
+    }
+
+    #[test]
+    fn firmware_requires_matching_successful_version_response_and_resets_on_reconnect() {
+        let now = Instant::now();
+        let mut host = Host::new(ozproto::Config::default());
+        let answer = hex("080160c0630600200347");
+        for (step, response_id, code, expected) in [
+            (11, 7, 0, true),
+            (11, 6, 0, false),
+            (11, 7, 1, false),
+            (9, 7, 0, false),
+        ] {
+            let mut ctl = Controller::new(false);
+            ctl.step = step;
+            ctl.pending = Some((7, now, 1));
+            ctl.on_usb(
+                now,
+                &Message::VendorClass {
+                    req_id: response_id,
+                    rcode: code,
+                    data: answer.clone(),
+                },
+                &mut host,
+            );
+            assert_eq!(ctl.firmware().is_some(), expected);
+            if expected {
+                assert_eq!(ctl.firmware().unwrap().to_string(), "1.96/99/3.71/0.32");
+                ctl.start(now, &mut host);
+                assert_eq!(ctl.firmware(), None);
+            }
+        }
     }
 
     #[test]

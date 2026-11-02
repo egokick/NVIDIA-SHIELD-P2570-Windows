@@ -6,6 +6,11 @@ using System.Text.Json;
 
 namespace ShieldController;
 
+internal sealed class OwnerCommandException(string message, FiveGhzFailureText? bandFailure = null) : InvalidOperationException(message)
+{
+    internal FiveGhzFailureText? BandFailure { get; } = bandFailure;
+}
+
 internal sealed class OwnerClient : IDisposable, IPairingService
 {
     internal static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NVIDIA-SHIELD-P2570-Windows");
@@ -15,6 +20,8 @@ internal sealed class OwnerClient : IDisposable, IPairingService
     private string? sessionDirectory;
     private Process? commandProcess;
     internal bool Running => session is { HasExited: false };
+    internal string? SessionFailureMessage { get; private set; }
+    internal FiveGhzFailureText? SessionBandFailure { get; private set; }
     internal bool CommandPending => commandProcess is { HasExited: false };
     internal string LogDirectory => sessionDirectory ?? Root;
     internal event Action<JsonElement>? SessionEvent;
@@ -70,7 +77,7 @@ internal sealed class OwnerClient : IDisposable, IPairingService
         {
             await process.WaitForExitAsync().WaitAsync(timeout);
             await Task.WhenAll(output, errors).WaitAsync(TimeSpan.FromSeconds(3));
-            if (process.ExitCode != 0) throw new InvalidOperationException($"Controller setup did not complete (exit {process.ExitCode}). Open logs for the diagnostic receipt.");
+            if (process.ExitCode != 0) throw new OwnerCommandException(ExplainFailure(events), ExplainBandFailure(events));
             return events;
         }
         catch (TimeoutException)
@@ -78,6 +85,40 @@ internal sealed class OwnerClient : IDisposable, IPairingService
             // Pairing/provider workers own bounded cleanup. Do not kill them during provisioning.
             throw new TimeoutException("Controller setup is taking longer than expected. Wait for cleanup before retrying; see the log folder.");
         }
+    }
+    internal static string ExplainFailure(IReadOnlyList<JsonElement> events)
+    {
+        if (ExplainBandFailure(events) is { } bandFailure) return bandFailure.Message;
+        // Use only known checkpoints to select our own text. Native messages
+        // and controller identifiers must never leak into the visible error.
+        var failure = events.LastOrDefault(e => Phase(e) is "failed" or "setup-error");
+        string? checkpoint = failure.ValueKind == JsonValueKind.Object && failure.TryGetProperty("detail", out var detail) ? OptionalString(detail, "checkpoint") : null;
+        return checkpoint switch {
+            "setup-interface-changed" => "The Wi-Fi or internet connection changed. Restore the selected adapters, then check setup again.",
+            "pairing-network-unavailable" or "pairing-bootstrap-channel" => "Windows could not verify the temporary pairing network. Keep one Wi-Fi adapter enabled and try again. Pairing can use 2.4 or 5 GHz; controller input uses 5 GHz.",
+            "setup-hotspot-start" => "Windows could not start the temporary pairing network. Check that Wi-Fi and your internet connection are ready, then try again.",
+            "setup-hotspot-changed" => "The pairing network changed during setup. Wait for cleanup, then check setup again.",
+            "setup-single-radio" => "Pairing needs one Wi-Fi adapter enabled. Turn off extra Wi-Fi adapters in Windows Settings, then try again.",
+            "selected-target" => "The controller selection expired or differs from saved setup. Keep its logo flashing and search again. Open Settings to forget an old controller.",
+            "read-only-preflight" => "Check Wi-Fi permission, your internet connection, and that Windows Mobile Hotspot is off. Open Settings for setup details.",
+            "setup-recovery-required" => "The last setup needs cleanup. Open Settings and choose Recover connection.",
+            _ => "Pairing didn't finish. Unplug USB, hold the green logo for three seconds, then try again. Open Help for logs."
+        };
+    }
+    private static bool ReportedFiveGhzSupport(JsonElement value) => Phase(value) == "validated" && value.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.Object &&
+        detail.TryGetProperty("supports_5ghz", out var supported) && supported.ValueKind == JsonValueKind.True;
+    internal static FiveGhzFailureText? ExplainBandFailure(IReadOnlyList<JsonElement> events)
+    {
+        var failure = events.LastOrDefault(e => Phase(e) is "failed" or "setup-error");
+        return ReadBandFailure(failure, events.Any(ReportedFiveGhzSupport), pairing: false);
+    }
+    private static FiveGhzFailureText? ReadBandFailure(JsonElement value, bool supportsFive, bool pairing)
+    {
+        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty("detail", out var detail) || detail.ValueKind != JsonValueKind.Object) return null;
+        string? checkpoint = OptionalString(detail, "checkpoint");
+        if (checkpoint != "five-ghz-required") return null;
+        int? channel = detail.TryGetProperty("observed_channel", out var observed) && observed.ValueKind == JsonValueKind.Number && observed.TryGetInt32(out int number) ? number : null;
+        return ConnectionSettings.DescribeFiveGhzFailure(OptionalString(detail, "band_failure_reason"), channel, supportsFive, pairing);
     }
     public async Task<Capabilities> GetCapabilities()
     {
@@ -95,14 +136,14 @@ internal sealed class OwnerClient : IDisposable, IPairingService
     public async Task<Candidate[]> Discover(string wifi, string uplink)
     {
         CreatePrivateDirectory(Root);
-        var events = await Command(["--mode", "discover", "--wifi-guid", wifi, "--uplink-guid", uplink], TimeSpan.FromSeconds(75));
+        var events = await Command(["--mode", "discover", "--wifi-guid", wifi, "--uplink-guid", uplink], PairingTiming.DiscoveryCommandBudget);
         return events.Where(e => Phase(e) == "candidate").Select(e => e.GetProperty("detail"))
             .Select(d => new Candidate(d.GetProperty("target_id_hash").GetString()!, d.GetProperty("display_name").GetString()!)).DistinctBy(c => c.TargetIdHash).ToArray();
     }
     public async Task Pair(Candidate target, string wifi, string uplink)
     {
         CreatePrivateDirectory(Root);
-        var events = await Command(["--mode", "pair", "--target-id-hash", target.TargetIdHash, "--wifi-guid", wifi, "--uplink-guid", uplink], TimeSpan.FromSeconds(125));
+        var events = await Command(["--mode", "pair", "--target-id-hash", target.TargetIdHash, "--wifi-guid", wifi, "--uplink-guid", uplink], PairingTiming.PairCommandBudget);
         if (!events.Any(e => Phase(e) == "pairing-succeeded")) throw new InvalidDataException("No successful provisioning receipt was returned.");
     }
     internal async Task Recover() => _ = await Command(["--mode", "recover"], TimeSpan.FromSeconds(50));
@@ -114,6 +155,8 @@ internal sealed class OwnerClient : IDisposable, IPairingService
     internal void StartSession()
     {
         if (Running) return;
+        SessionFailureMessage = null;
+        SessionBandFailure = null;
         CreatePrivateDirectory(Root);
         string id = Guid.NewGuid().ToString("N");
         sessionDirectory = Path.Combine(Root, "sessions", id);
@@ -130,6 +173,7 @@ internal sealed class OwnerClient : IDisposable, IPairingService
     private async Task ObserveSession(Process own)
     {
         int code = -1;
+        bool supportsFive = false;
         var outputFailure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void Failed()
         {
@@ -139,7 +183,15 @@ internal sealed class OwnerClient : IDisposable, IPairingService
         }
         try
         {
-            Task output = ReadEvents(own, e => SessionEvent?.Invoke(e), Failed);
+            Task output = ReadEvents(own, e => {
+                supportsFive |= ReportedFiveGhzSupport(e);
+                if (Phase(e) is "failed" or "test-error" && ReadBandFailure(e, supportsFive, pairing: false) is { } bandFailure)
+                {
+                    SessionBandFailure = bandFailure;
+                    SessionFailureMessage = bandFailure.Message;
+                }
+                SessionEvent?.Invoke(e);
+            }, Failed);
             Task errors = DrainErrors(own);
             Task exit = own.WaitForExitAsync();
             if (await Task.WhenAny(exit, outputFailure.Task) == outputFailure.Task)

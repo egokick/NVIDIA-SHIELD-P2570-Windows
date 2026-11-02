@@ -31,6 +31,8 @@
 #include <thread>
 #include <iostream>
 using Microsoft::WRL::ComPtr;
+static constexpr int DiscoverySeconds = 90;
+static constexpr int ProvisioningSeconds = 180;
 static std::mutex outputMutex;
 static void line(const std::string& s) noexcept { std::lock_guard<std::mutex> lock(outputMutex); std::puts(s.c_str()); std::fflush(stdout); }
 static std::string jsonBool(bool v) { return v ? "true" : "false"; }
@@ -54,23 +56,72 @@ static std::string classify(const std::wstring& raw) {
     }
     return "other";
 }
-static std::wstring textProperty(IPropertyStore* store, REFPROPERTYKEY key) {
+struct TextPropertyObservation { HRESULT hr=E_FAIL; VARTYPE type=VT_EMPTY; bool present=false; };
+static std::wstring textProperty(IPropertyStore* store, REFPROPERTYKEY key, TextPropertyObservation* observation=nullptr) {
     PROPVARIANT v{}; std::wstring result;
-    if (SUCCEEDED(store->GetValue(key,&v)) && v.vt==VT_LPWSTR && v.pwszVal && wcsnlen_s(v.pwszVal,2049)<=2048) result=v.pwszVal;
+    HRESULT hr=store->GetValue(key,&v);
+    if (SUCCEEDED(hr) && v.vt==VT_LPWSTR && v.pwszVal && wcsnlen_s(v.pwszVal,2049)<=2048) result=v.pwszVal;
+    if(observation)*observation={hr,v.vt,!result.empty()};
     PropVariantClear(&v); return result;
 }
 static bool usableMac(const std::array<BYTE,6>& bytes) {return (bytes[0]&1)==0&&std::any_of(bytes.begin(),bytes.end(),[](BYTE b){return b!=0;});}
 static bool targetModel(const std::wstring& model,const std::wstring& manufacturer) {return classify(model)=="nvidia_blake"&&normalized(manufacturer)==L"ozmo";}
+static std::string diagnosticClass(const std::wstring& raw,bool manufacturer=false) {return manufacturer?(normalized(raw)==L"ozmo"?"ozmo":"other"):classify(raw);}
+static std::string propertyObservation(const TextPropertyObservation& value) {
+    return "{\"hresult\":"+std::to_string(static_cast<unsigned>(value.hr))+",\"variant_type\":"+std::to_string(value.type)+",\"present\":"+jsonBool(value.present)+"}";
+}
+// Cached getters only: this neither starts a WPS exchange nor changes identity
+// selection. Values are classified before logging; raw device strings/addresses
+// and network settings never enter the observation record.
+static void observeCachedDevice(IFunctionInstance* instance,const std::string& id,
+    const TextPropertyObservation& friendly,const TextPropertyObservation& model,const TextPropertyObservation& manufacturer,
+    HRESULT macHr,VARTYPE macType,bool macAvailable,const std::array<BYTE,6>& propertyMac) {
+    ComPtr<IWCNDevice> device;HRESULT hr=instance->QueryService(SID_WcnProvider,IID_PPV_ARGS(&device));
+    std::string record="{\"phase\":\"cached_discovery_observation\",\"id_hash\":\""+id+"\",\"property_name\":"+propertyObservation(friendly)+
+        ",\"property_model\":"+propertyObservation(model)+",\"property_manufacturer\":"+propertyObservation(manufacturer)+
+        ",\"property_mac\":{\"hresult\":"+std::to_string(static_cast<unsigned>(macHr))+",\"variant_type\":"+std::to_string(macType)+",\"available\":"+jsonBool(macAvailable)+"},\"query_service_hresult\":"+std::to_string(static_cast<unsigned>(hr));
+    if(SUCCEEDED(hr)&&device) {
+        auto stringAttribute=[&](const char* name,WCN_ATTRIBUTE_TYPE type,bool isManufacturer=false) {
+            wchar_t value[128]{};HRESULT result=device->GetStringAttribute(type,128,value);
+            bool present=SUCCEEDED(result)&&value[0]!=L'\0'&&wcsnlen_s(value,128)<128;
+            record+=",\""+std::string(name)+"\":{\"hresult\":"+std::to_string(static_cast<unsigned>(result))+",\"present\":"+jsonBool(present)+",\"class\":\""+(present?diagnosticClass(value,isManufacturer):"other")+"\"}";
+        };
+        auto integerAttribute=[&](const char* name,WCN_ATTRIBUTE_TYPE type,UINT maximum) {
+            UINT value=0;HRESULT result=device->GetIntegerAttribute(type,&value);bool available=SUCCEEDED(result)&&value<=maximum;
+            record+=",\""+std::string(name)+"\":{\"hresult\":"+std::to_string(static_cast<unsigned>(result))+",\"available\":"+jsonBool(available)+",\"value\":"+(available?std::to_string(value):"null")+"}";
+        };
+        stringAttribute("cached_name",WCN_TYPE_DEVICE_NAME);
+        stringAttribute("cached_model",WCN_TYPE_MODEL_NAME);
+        stringAttribute("cached_manufacturer",WCN_TYPE_MANUFACTURER,true);
+        integerAttribute("rf_bands",WCN_TYPE_RF_BANDS,7);
+        integerAttribute("ap_channel",WCN_TYPE_AP_CHANNEL,233);
+        integerAttribute("configuration_methods",WCN_TYPE_CONFIG_METHODS,65535);
+        integerAttribute("device_password_id",WCN_TYPE_DEVICE_PASSWORD_ID,65535);
+        integerAttribute("request_type",WCN_TYPE_REQUEST_TYPE,3);
+        integerAttribute("selected_registrar",WCN_TYPE_SELECTED_REGISTRAR,1);
+        BYTE mac[6]{};DWORD used=0;HRESULT result=device->GetAttribute(WCN_TYPE_MAC_ADDRESS,6,mac,&used);
+        bool available=SUCCEEDED(result)&&used==6;
+        record+=",\"cached_mac\":{\"hresult\":"+std::to_string(static_cast<unsigned>(result))+",\"available\":"+jsonBool(available)+",\"matches_property\":"+jsonBool(available&&macAvailable&&std::equal(propertyMac.begin(),propertyMac.end(),mac))+"}";
+        BYTE primary[8]{};used=0;result=device->GetAttribute(WCN_TYPE_PRIMARY_DEVICE_TYPE,8,primary,&used);
+        available=SUCCEEDED(result)&&used==8;unsigned category=(static_cast<unsigned>(primary[0])<<8)|primary[1];
+        record+=",\"primary_device_category\":{\"hresult\":"+std::to_string(static_cast<unsigned>(result))+",\"available\":"+jsonBool(available)+",\"value\":"+(available?std::to_string(category):"null")+"}";
+    }
+    line(record+",\"cached_getters_only\":true,\"identity_selection_unchanged\":true,\"raw_identifiers_logged\":false}");
+}
 class Notify final : public IFunctionDiscoveryNotification {
     std::atomic<ULONG> refs{1}; std::mutex guard; std::set<std::string> ids; std::array<BYTE,6> expected;
-    ComPtr<IFunctionInstance> target; std::set<std::string> liveTargets; std::string targetId; std::chrono::steady_clock::time_point seen{}; bool stopping=false; bool discoverOnly;
+    std::set<std::string> observedMetadata;
+    ComPtr<IFunctionInstance> target; std::set<std::string> liveTargets; std::string targetId; bool stopping=false; bool discoverOnly;
 public:
     std::atomic<unsigned> updates{0}, errors{0}, callbackErrors{0}, targets{0}, matches{0};
     std::atomic<bool> released{false};
     explicit Notify(std::array<BYTE,6> mac,bool discover):expected(mac),discoverOnly(discover) {}
     ULONG count() const { return refs.load(); }
-    ComPtr<IFunctionInstance> FreshTarget() { std::lock_guard<std::mutex> lock(guard); return !stopping && liveTargets.size()==1 && liveTargets.count(targetId)==1 && target && std::chrono::steady_clock::now()-seen<std::chrono::seconds(5) ? target : ComPtr<IFunctionInstance>{}; }
-    std::string FreshTargetId() { std::lock_guard<std::mutex> lock(guard); return !stopping && liveTargets.size()==1 && liveTargets.count(targetId)==1 && target && std::chrono::steady_clock::now()-seen<std::chrono::seconds(5) ? targetId : ""; }
+    // Function Discovery reports changes, not periodic heartbeats. Keep the
+    // uniquely identified target from this query until removal, contradiction,
+    // ambiguity or shutdown; adapter verification may legitimately take >5s.
+    ComPtr<IFunctionInstance> SelectedTarget() { std::lock_guard<std::mutex> lock(guard); return !stopping && liveTargets.size()==1 && liveTargets.count(targetId)==1 && target ? target : ComPtr<IFunctionInstance>{}; }
+    std::string SelectedTargetId() { std::lock_guard<std::mutex> lock(guard); return !stopping && liveTargets.size()==1 && liveTargets.count(targetId)==1 && target ? targetId : ""; }
     void StopTargets() { std::lock_guard<std::mutex> lock(guard); stopping=true; target.Reset(); targetId.clear(); }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
         if (!out) return E_POINTER; *out=nullptr;
@@ -92,9 +143,10 @@ public:
                 { std::lock_guard<std::mutex> lock(guard); if(id.empty() || liveTargets.erase(id)!=0) { target.Reset(); targetId.clear(); if(id.empty())liveTargets.clear(); } }
                 line("{\"phase\":\"property_error\",\"hresult\":"+std::to_string(static_cast<unsigned>(hr))+"}");return S_OK;
             }
-            auto friendly=textProperty(store.Get(),PKEY_DeviceDisplay_FriendlyName);
-            auto model=textProperty(store.Get(),PKEY_DeviceDisplay_ModelName);
-            auto manufacturer=textProperty(store.Get(),PKEY_DeviceDisplay_Manufacturer);
+            TextPropertyObservation friendlyObservation,modelObservation,manufacturerObservation;
+            auto friendly=textProperty(store.Get(),PKEY_DeviceDisplay_FriendlyName,&friendlyObservation);
+            auto model=textProperty(store.Get(),PKEY_DeviceDisplay_ModelName,&modelObservation);
+            auto manufacturer=textProperty(store.Get(),PKEY_DeviceDisplay_Manufacturer,&manufacturerObservation);
             auto nc=classify(friendly), mc=classify(model); bool ozmo=normalized(manufacturer)==L"ozmo";
             bool possible=nc!="other" || mc!="other";
             PROPVARIANT mac{}; bool available=false, equal=false; std::array<BYTE,6> observed{};
@@ -104,7 +156,7 @@ public:
                 available=usableMac(observed);
                 equal=available&&std::equal(expected.begin(),expected.end(),observed.begin());
             }
-            PropVariantClear(&mac);
+            VARTYPE macType=mac.vt;PropVariantClear(&mac);
             if(discoverOnly&&available&&targetModel(model,manufacturer)&&!id.empty()) {
                 std::string bytes;for(auto b:observed){if(!bytes.empty())bytes+=",";bytes+=std::to_string(b);}
                 line("{\"phase\":\"private_candidate\",\"target_id_hash\":\""+id+"\",\"controller_mac\":["+bytes+"],\"model_verified\":true,\"manufacturer_verified\":true}");
@@ -113,10 +165,14 @@ public:
               if (!id.empty()) ids.insert(id);
               bool exact=equal && targetModel(model,manufacturer) && !id.empty();
               if (action==QUA_REMOVE || !exact) { if(liveTargets.erase(id)!=0) { target.Reset(); targetId.clear(); } }
-              else if (!stopping) { liveTargets.insert(id); target=instance; targetId=id; seen=std::chrono::steady_clock::now(); }
+              else if (!stopping) { liveTargets.insert(id); target=instance; targetId=id; }
             }
             if (possible) ++targets; if (equal) ++matches;
             line("{\"phase\":\"device\",\"action\":"+std::to_string(static_cast<unsigned>(action))+",\"id_hash\":\""+id+"\",\"name_class\":\""+nc+"\",\"model_class\":\""+mc+"\",\"manufacturer_ozmo\":"+jsonBool(ozmo)+",\"possible_target\":"+jsonBool(possible)+",\"mac_available\":"+jsonBool(available)+",\"own_mac_equal\":"+jsonBool(equal)+",\"after_query_release\":"+jsonBool(released.load())+"}");
+            bool observe=false;
+            { std::lock_guard<std::mutex> lock(guard); if(!id.empty()&&observedMetadata.size()<64)observe=observedMetadata.insert(id).second; }
+            if(observe)try { observeCachedDevice(instance,id,friendlyObservation,modelObservation,manufacturerObservation,macHr,macType,available,observed); }
+            catch(...) { line("{\"phase\":\"cached_discovery_observation_error\",\"raw_identifiers_logged\":false}"); }
         } catch (...) { ++callbackErrors; line("{\"phase\":\"callback_error\"}"); } return S_OK;
     }
     HRESULT STDMETHODCALLTYPE OnError(HRESULT hr, FDQUERYCONTEXT, const WCHAR*) override {
@@ -234,7 +290,8 @@ int wmain(int argc,wchar_t** argv) {
     if(argc==2&&std::wstring(argv[1])==L"--selftest") {
         std::array<BYTE,6> mac{};bool pass=classify(L"  nVidiaBlake  ")=="nvidia_blake"&&classify(L"PANdev")=="pandev"&&classify(L"NVIDIAevil")=="other"&&parseMac(L"001122aabbcc",mac)&&!parseMac(L"001122aabbzz",mac)&&WCN_PASSWORD_TYPE_PUSH_BUTTON==0&&WCN_VALUE_DP_PUSHBUTTON==4&&(WCN_VALUE_CM_PHYS_PUSHBUTTON&WCN_VALUE_CM_PUSHBUTTON)!=0;
         pass=pass&&usableMac({2,1,2,3,4,5})&&!usableMac({3,1,2,3,4,5})&&!usableMac({0,0,0,0,0,0})&&targetModel(L" nVidiaBlake ",L" OZMO ")&&!targetModel(L"NVIDIA",L"Ozmo")&&!targetModel(L"nVidiaBlake",L"Other");
-        line(std::string("{\"phase\":\"selftest\",\"passed\":")+jsonBool(pass)+",\"checks\":14}");return pass?0:1;
+        pass=pass&&diagnosticClass(L"private-router-name\"secret")=="other"&&diagnosticClass(L"private-manufacturer",true)=="other"&&diagnosticClass(L" Ozmo ",true)=="ozmo"&&diagnosticClass(L"nVidiaBlake")=="nvidia_blake";
+        line(std::string("{\"phase\":\"selftest\",\"passed\":")+jsonBool(pass)+",\"checks\":18}");return pass?0:1;
     }
     if(argc==2&&std::wstring(argv[1])==L"--profile-selftest") {
         HRESULT init=CoInitializeEx(nullptr,COINIT_MULTITHREADED);if(FAILED(init))return 1;bool pass=false;
@@ -250,7 +307,7 @@ int wmain(int argc,wchar_t** argv) {
     if(argc!=3||std::wstring(argv[1])!=L"--internal-query"||(std::wstring(argv[2])!=L"pair"&&std::wstring(argv[2])!=L"discover")){line("{\"phase\":\"plan\",\"activation\":false,\"instruction\":\"Use ShieldControllerOwner setup\"}");return argc==1?0:2;}
     // Last-resort lifetime bound even if the supervisor dies or a native COM
     // call never returns. Forced process exit does not prove provisioning rollback.
-    std::thread([]{std::this_thread::sleep_for(std::chrono::seconds(95));ExitProcess(89);}).detach();
+    std::thread([]{std::this_thread::sleep_for(std::chrono::seconds(300));ExitProcess(89);}).detach();
     std::array<BYTE,6> expected{};bool pair=std::wstring(argv[2])==L"pair";std::wstring profile;
     try{if(pair){std::string macLine;std::getline(std::cin,macLine);if(macLine.size()!=12)throw 1;std::wstring raw(macLine.begin(),macLine.end());if(!parseMac(raw.c_str(),expected)||!usableMac(expected))throw 1;profile=readProfile();}}
     catch(...){line("{\"phase\":\"private_profile_input_rejected\"}");return 2;}
@@ -265,10 +322,10 @@ int wmain(int argc,wchar_t** argv) {
             if(SUCCEEDED(hr)){hr=discovery->CreateInstanceCollectionQuery(FCTN_CATEGORY_WCN,nullptr,FALSE,notify,nullptr,&query);checkpoint("create_wcn_query",hr);}
             if(SUCCEEDED(hr)){hr=query->AddQueryConstraint(WCN_QUERY_CONSTRAINT_USE_SOFTAP,FD_CONSTRAINTVALUE_TRUE);checkpoint("add_softap_constraint",hr);}
             if(SUCCEEDED(hr)){
-                line("{\"phase\":\"execute_begin\",\"softap_requested\":true,\"discovery_seconds\":20}");executed=true;executeHr=query->Execute(&collection);checkpoint("execute_return",executeHr);
+                line("{\"phase\":\"execute_begin\",\"softap_requested\":true,\"discovery_seconds\":"+std::to_string(DiscoverySeconds)+"}");executed=true;executeHr=query->Execute(&collection);checkpoint("execute_return",executeHr);
                 if(SUCCEEDED(executeHr)||executeHr==E_PENDING){
-                    auto until=std::chrono::steady_clock::now()+std::chrono::seconds(20);
-                    do{target=notify->FreshTarget();if(target)break;std::this_thread::sleep_for(std::chrono::milliseconds(100));}while(std::chrono::steady_clock::now()<until);
+                    auto until=std::chrono::steady_clock::now()+std::chrono::seconds(DiscoverySeconds);
+                    do{target=notify->SelectedTarget();if(target)break;std::this_thread::sleep_for(std::chrono::milliseconds(100));}while(std::chrono::steady_clock::now()<until);
                 }
             }
             found=static_cast<bool>(target);std::string retainedId;
@@ -278,21 +335,21 @@ int wmain(int argc,wchar_t** argv) {
                 if(!ownedId.empty())retainedId=hash(ownedId);
                 hr=target->QueryService(SID_WcnProvider,IID_PPV_ARGS(&device));checkpoint("query_iwcndevice",hr);if(SUCCEEDED(hr)&&device)identity=mandatoryIdentity(device.Get(),expected);
             }
-            bool sameFreshTarget=!retainedId.empty()&&notify->FreshTargetId()==retainedId;
-            if(!sameFreshTarget)identity=false;
-            line("{\"phase\":\"pre_provision_target_check\",\"same_fresh_target\":"+jsonBool(sameFreshTarget)+",\"id_hash\":\""+retainedId+"\"}");
-            if(pair&&identity&&sameFreshTarget&&notify->errors==0&&notify->callbackErrors==0){
-                // Managed supervisor checks the actual unique bootstrap GO channel
-                // and exact chosen PC interfaces before authorizing any Set call.
+            bool sameSelectedTarget=!retainedId.empty()&&notify->SelectedTargetId()==retainedId;
+            if(!sameSelectedTarget)identity=false;
+            line("{\"phase\":\"pre_provision_target_check\",\"same_selected_target\":"+jsonBool(sameSelectedTarget)+",\"id_hash\":\""+retainedId+"\"}");
+            if(pair&&identity&&sameSelectedTarget&&notify->errors==0&&notify->callbackErrors==0){
+                // Supervisor rechecks the selected radio/uplink and any existing
+                // bootstrap GO. Discovery does not promise to create a GO.
                 line("{\"phase\":\"provision_ready\"}");std::string approval;std::getline(std::cin,approval);
-                if(approval!="approve-bootstrap-channel"||notify->FreshTargetId()!=retainedId)throw 1;
+                if(approval!="approve-provisioning"||notify->SelectedTargetId()!=retainedId)throw 1;
                 line("{\"phase\":\"private_profile_queue_begin\"}");hr=device->SetNetworkProfile(profile.c_str());checkpoint("set_network_profile",hr);
                 // Retain only until GetNetworkProfile after successful completion;
                 // never serialize this private input or the returned XML.
                 if(SUCCEEDED(hr)){hr=device->SetPassword(WCN_PASSWORD_TYPE_PUSH_BUTTON,0,nullptr);checkpoint("set_push_button",hr);}
                 if(SUCCEEDED(hr)){
-                    line("{\"phase\":\"connect_begin\",\"pair_seconds\":60,\"no_supported_cancel_or_rollback\":true}");connectAttempted=true;connectHr=device->Connect(connectNotify);checkpoint("connect_return",connectHr);connectAccepted=SUCCEEDED(connectHr);
-                    if(connectAccepted){auto until=std::chrono::steady_clock::now()+std::chrono::seconds(60);while(connectNotify->terminal==0&&std::chrono::steady_clock::now()<until)std::this_thread::sleep_for(std::chrono::milliseconds(100));pairTimedOut=connectNotify->terminal==0;if(connectNotify->terminal==1){observeCompletedProfile(device.Get(),profile);line("{\"phase\":\"post_success_observation_begin\",\"seconds\":5,\"set_calls\":0,\"device_persistence_proven\":false}");std::this_thread::sleep_for(std::chrono::seconds(5));line("{\"phase\":\"post_success_observation_end\",\"seconds\":5,\"set_calls\":0}");}}
+                    line("{\"phase\":\"connect_begin\",\"pair_seconds\":"+std::to_string(ProvisioningSeconds)+",\"no_supported_cancel_or_rollback\":true}");connectAttempted=true;connectHr=device->Connect(connectNotify);checkpoint("connect_return",connectHr);connectAccepted=SUCCEEDED(connectHr);
+                    if(connectAccepted){auto until=std::chrono::steady_clock::now()+std::chrono::seconds(ProvisioningSeconds);while(connectNotify->terminal==0&&std::chrono::steady_clock::now()<until)std::this_thread::sleep_for(std::chrono::milliseconds(100));pairTimedOut=connectNotify->terminal==0;if(connectNotify->terminal==1){observeCompletedProfile(device.Get(),profile);line("{\"phase\":\"post_success_observation_begin\",\"seconds\":5,\"set_calls\":0,\"device_persistence_proven\":false}");std::this_thread::sleep_for(std::chrono::seconds(5));line("{\"phase\":\"post_success_observation_end\",\"seconds\":5,\"set_calls\":0}");}}
                 }
             }
         }catch(...){line("{\"phase\":\"worker_exception\"}");}

@@ -4,16 +4,71 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use ozproto::Mac;
-use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
+use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS, HANDLE};
 use windows::Win32::NetworkManagement::IpHelper::{
     GAA_FLAG_INCLUDE_ALL_INTERFACES, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
     GAA_FLAG_SKIP_MULTICAST, GAA_FLAG_SKIP_UNICAST, GetAdaptersAddresses, GetIfEntry2,
-    IP_ADAPTER_ADDRESSES_LH, MIB_IF_ROW2,
+    IF_TYPE_IEEE80211, IP_ADAPTER_ADDRESSES_LH, MIB_IF_ROW2,
 };
 use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+use windows::Win32::NetworkManagement::WiFi::{
+    DOT11_OPERATION_MODE_WFD_GROUP_OWNER, WlanCloseHandle, WlanFreeMemory, WlanOpenHandle,
+    WlanQueryInterface, wlan_intf_opcode_current_operation_mode,
+};
 use windows::Win32::Networking::WinSock::AF_UNSPEC;
+use windows::core::GUID;
 
-const WFD_DESCRIPTION: &str = "Wi-Fi Direct Virtual Adapter";
+struct WifiRoles(HANDLE);
+
+impl WifiRoles {
+    fn open() -> Result<Self> {
+        let (mut version, mut handle) = (0, HANDLE::default());
+        let rc = unsafe { WlanOpenHandle(2, None, &mut version, &mut handle) };
+        if rc != 0 {
+            bail!("WlanOpenHandle failed while reading interface roles: {rc}");
+        }
+        Ok(Self(handle))
+    }
+
+    fn group_owner(&self, guid: &str) -> bool {
+        let Ok(value) = u128::from_str_radix(&guid.trim_matches(['{', '}']).replace('-', ""), 16)
+        else {
+            return false;
+        };
+        let id = GUID::from_u128(value);
+        let (mut size, mut data) = (0, std::ptr::null_mut());
+        let rc = unsafe {
+            WlanQueryInterface(
+                self.0,
+                &id,
+                wlan_intf_opcode_current_operation_mode,
+                None,
+                &mut size,
+                &mut data,
+                None,
+            )
+        };
+        let mode = if rc == 0 && size == 4 && !data.is_null() {
+            Some(unsafe { data.cast::<u32>().read_unaligned() })
+        } else {
+            None
+        };
+        if !data.is_null() {
+            unsafe { WlanFreeMemory(data) };
+        }
+        group_owner_mode(mode)
+    }
+}
+
+impl Drop for WifiRoles {
+    fn drop(&mut self) {
+        unsafe { WlanCloseHandle(self.0, None) };
+    }
+}
+
+fn group_owner_mode(mode: Option<u32>) -> bool {
+    mode == Some(DOT11_OPERATION_MODE_WFD_GROUP_OWNER)
+}
 
 #[derive(Debug, Clone)]
 pub struct Adapter {
@@ -23,11 +78,12 @@ pub struct Adapter {
     pub description: String,
     pub mac: Option<Mac>,
     pub up: bool,
+    pub group_owner: bool,
 }
 
 impl Adapter {
     pub fn is_wifi_direct(&self) -> bool {
-        self.description.contains(WFD_DESCRIPTION)
+        self.group_owner
     }
 
     /// Same GUID w/o braces, for comparing against WinRT adapter IDs
@@ -37,6 +93,7 @@ impl Adapter {
 }
 
 pub fn list() -> Result<Vec<Adapter>> {
+    let roles = WifiRoles::open()?;
     let flags = GAA_FLAG_INCLUDE_ALL_INTERFACES
         | GAA_FLAG_SKIP_UNICAST
         | GAA_FLAG_SKIP_ANYCAST
@@ -75,7 +132,13 @@ pub fn list() -> Result<Vec<Adapter>> {
         // which repeat the virtual adapter's description and MAC. They are
         // not independent capture adapters. Use the documented flag rather
         // than trying to recognize localized filter names.
-        if description.contains(WFD_DESCRIPTION) {
+        // WiFiCx ports can share the physical radio's description. Never
+        // identify a GO by an English or vendor-specific display name.
+        // Only active IEEE 802.11 ports need a WLAN role query. Keep checking
+        // every wireless port so multiple GOs remain an error.
+        let up = a.OperStatus == IfOperStatusUp;
+        let group_owner = up && a.IfType == IF_TYPE_IEEE80211 && roles.group_owner(&guid);
+        if group_owner {
             let mut row = MIB_IF_ROW2 {
                 InterfaceLuid: a.Luid,
                 ..Default::default()
@@ -96,7 +159,8 @@ pub fn list() -> Result<Vec<Adapter>> {
             friendly_name,
             description,
             mac,
-            up: a.OperStatus == IfOperStatusUp,
+            up,
+            group_owner,
         });
         p = a.Next;
     }
@@ -174,4 +238,38 @@ pub fn ensure_no_active_go(adapters: &[Adapter]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn port(id: &str, mode: u32, up: bool) -> Adapter {
+        Adapter {
+            guid: id.into(),
+            friendly_name: "Wi-Fi".into(),
+            description: "MediaTek Wi-Fi 7 MT7925 Wireless LAN Card".into(),
+            mac: Some([2, 1, 2, 3, 4, 5]),
+            up,
+            group_owner: group_owner_mode(Some(mode)),
+        }
+    }
+
+    #[test]
+    fn wificx_ports_with_identical_descriptions_use_reported_roles() {
+        let station = port("physical", 4, true);
+        let before = vec![station.clone(), port("go", 32, false)];
+        ensure_no_active_go(&before).unwrap();
+        let after = vec![station, port("go", 32, true)];
+        assert!(ensure_no_active_go(&after).is_err());
+        assert_eq!(newly_up_go(&before, after).unwrap().unwrap().guid, "go");
+        assert!(!group_owner_mode(None));
+        assert!(!group_owner_mode(Some(16)));
+        assert!(!group_owner_mode(Some(64)));
+    }
+
+    #[test]
+    fn multiple_reported_group_owners_remain_ambiguous() {
+        assert!(newly_up_go(&[], vec![port("one", 32, true), port("two", 32, true)]).is_err());
+    }
 }

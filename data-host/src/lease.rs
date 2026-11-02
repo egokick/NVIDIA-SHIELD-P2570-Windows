@@ -60,8 +60,11 @@ impl OwnerReceipt {
             "invalid_owner_schema"
         );
         ensure!(
-            matches!(self.channel, 1..=11 | 36 | 40 | 44 | 48),
-            "owner_unsupported_channel"
+            matches!(
+                self.channel,
+                36 | 40 | 44 | 48 | 149 | 153 | 157 | 161 | 165
+            ),
+            "owner_requires_supported_5ghz_channel"
         );
         ensure!(
             valid_mac(self.adapter_mac)
@@ -149,17 +152,17 @@ mod tests {
         r.controller_mac = [1; 6];
         assert!(r.validate(11000).is_err());
         r = receipt();
-        r.channel = 149;
+        r.channel = 64;
         assert!(r.validate(11000).is_err());
     }
     #[test]
-    fn accepts_supported_controller_bands_only() {
-        for channel in [1, 6, 11, 36, 40, 44, 48] {
+    fn accepts_supported_5ghz_channels_only() {
+        for channel in [36, 40, 44, 48, 149, 153, 157, 161, 165] {
             let mut r = receipt();
             r.channel = channel;
             assert!(r.validate(11000).is_ok());
         }
-        for channel in [0, 12, 14, 52, 149] {
+        for channel in [0, 1, 6, 11, 12, 14, 52, 64, 150, 166] {
             let mut r = receipt();
             r.channel = channel;
             assert!(r.validate(11000).is_err());

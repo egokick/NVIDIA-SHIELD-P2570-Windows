@@ -41,13 +41,20 @@ internal static class Program
             try { Console.WriteLine(JsonSerializer.Serialize(new { passed = true, checks = SetupFlowTests.Run(), hardware_calls = 0 })); return 0; }
             catch (Exception error) { ReportError(error); return 1; }
         }
-        if (args.Length == 4 && args[0] == "--render-preview-state" && args[2] == "--output")
+        if (args.Length is 4 or 6 && args[0] == "--render-preview-state" && args[2] == "--output")
         {
             string path = Path.GetFullPath(args[3]);
             if (!Enum.TryParse<SetupStage>(args[1], true, out var scene) || !Enum.IsDefined(scene) || !path.Split(Path.DirectorySeparatorChar).Contains("debug", StringComparer.OrdinalIgnoreCase) || Path.GetExtension(path) != ".png") return 2;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            Size? size = null;
+            if (args.Length == 6)
+            {
+                string[] dimensions = args[5].Split('x');
+                if (args[4] != "--viewport" || dimensions.Length != 2 || !int.TryParse(dimensions[0], out int w) || !int.TryParse(dimensions[1], out int h) || w is < 320 or > 3840 || h is < 400 or > 2160) return 2;
+                size = new Size(w, h);
+            }
             using var form = new SetupForm(new NativeSetupOperations(), launch: true, preview: true);
-            form.Render(path, scene); return 0;
+            form.Render(path, scene, size); return 0;
         }
         if (args.Any(a => a != "--silent" && a != "--no-launch")) return 2;
         bool silent = args.Contains("--silent"), launch = !args.Contains("--no-launch");

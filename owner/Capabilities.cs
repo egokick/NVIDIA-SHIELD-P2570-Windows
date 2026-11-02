@@ -20,7 +20,9 @@ internal static partial class Program
     {
         try
         {
-            using var document = JsonDocument.Parse(PrivateFiles.Read(ProvisionReceipt)); var p = document.RootElement;
+            byte[] bytes = PrivateFiles.Read(ProvisionReceipt);
+            using var document = JsonDocument.Parse(bytes); var p = document.RootElement;
+            if (p.GetProperty("schema").GetInt32() == 2) return ImportedPairingReceipt.Matches(bytes, value, DateTimeOffset.UtcNow);
             return p.GetProperty("schema").GetInt32() == 1 && p.GetProperty("pairing_success").GetBoolean() &&
                 p.GetProperty("identity_confirmed").GetBoolean() && p.GetProperty("connect_success_callback_observed").GetBoolean() &&
                 p.GetProperty("pc_cleanup_verified").GetBoolean() && p.GetProperty("channel").GetInt32() == value.Channel &&
@@ -28,7 +30,7 @@ internal static partial class Program
         }
         catch { return false; }
     }
-    private static async Task<int> Capabilities()
+    private static async Task<int> Capabilities(bool installationOnly = false)
     {
         checkpoint = "capabilities";
         var requirements = new List<object>();
@@ -47,6 +49,13 @@ internal static partial class Program
             Requirement("vigem", "ViGEmBus virtual Xbox controller driver", key is not null);
         bool packageOkay = false; try { package = PackageManifest.Load(); packageOkay = true; } catch { }
         Requirement("package", "Installed application files match their package manifest", packageOkay);
+        // Installing files/drivers does not need Wi-Fi discovery or location
+        // consent. Defer radio checks to the user's explicit pairing action.
+        if (installationOnly)
+        {
+            Log("capabilities", new { paired = false, recovery_required = false, requirements });
+            return 0;
+        }
         var names = NetworkInterface.GetAllNetworkInterfaces().Where(n => Guid.TryParse(n.Id, out _)).ToDictionary(n => Guid.Parse(n.Id), n => n.Name);
         var wifi = new List<object>(); var uplinks = new List<object>(); var uplinkIds = new HashSet<Guid>();
         Guid? defaultUplink = null;
@@ -83,12 +92,14 @@ internal static partial class Program
         }
         Requirement("uplink", "Active Internet connection required by the current Windows Mobile Hotspot path", uplinks.Count > 0);
         Configuration? configured = null; try { configured = Configuration.Load(PrivateFiles.Config); } catch { }
+        Configuration? selection = configured;
+        if (selection is null) { try { selection = Configuration.Load(Path.Combine(SetupRoot, "candidate.json")); } catch { } }
         bool paired = configured is not null && ProvisionMatches(configured);
-        Requirement("channel", "A supported 2.4 GHz or 5 GHz controller channel is required (verified at Start)", true);
+        Requirement("channel", "Controller input requires 5 GHz; temporary pairing may use 2.4 GHz or 5 GHz", true);
         Log("capabilities", new { paired, recovery_required = File.Exists(PrivateFiles.Recovery) || File.Exists(SetupActive), requirements,
-            wifi_adapters = wifi, uplink_adapters = uplinks, selected_wifi_guid = configured?.Wifi,
-            selected_uplink_guid = ChooseUplink(uplinkIds, configured?.Uplink, defaultUplink),
-            runtime_supported = supported, band_preference = ConnectionSettings.Load(), offline_uplink_supported = false });
+            wifi_adapters = wifi, uplink_adapters = uplinks, selected_wifi_guid = selection?.Wifi,
+            selected_uplink_guid = ChooseUplink(uplinkIds, selection?.Uplink, defaultUplink),
+            runtime_supported = supported, band_preference = "5ghz-only", offline_uplink_supported = false });
         return 0;
     }
 }

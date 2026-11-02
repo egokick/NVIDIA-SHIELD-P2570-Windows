@@ -17,6 +17,7 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\tray\SetupScrollPanel.cs" Link="SetupScrollPanel.cs" />
     <EmbeddedResource Include="..\assets\controller.png" LogicalName="controller.png" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(PayloadPath)')">

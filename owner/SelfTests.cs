@@ -6,7 +6,7 @@ internal static partial class Program
 {
     private static async Task<int> SelfTest()
     {
-        int count = ConnectionSettings.SelfTest();
+        int count = ConnectionSettings.SelfTest() + SetupBandGuard.SelfTest() + ChannelInspection.PairingChannelSelfTest() + PairingImportSelfTest() + OwnerHeartbeatLease.SelfTest();
         void Check(bool value) { if (!value) throw new InvalidOperationException("Offline contract check failed."); count++; }
         var first = Guid.Parse("11111111-1111-1111-1111-111111111111"); var second = Guid.Parse("22222222-2222-2222-2222-222222222222");
         Check(ChooseUplink([first, second], first, second) == first);
@@ -20,6 +20,19 @@ internal static partial class Program
         Check(NpcapConfigured(true, true, null) && NpcapConfigured(true, true, 0));
         Check(!NpcapConfigured(true, true, 1) && !NpcapConfigured(true, true, "0"));
         Check(!NpcapConfigured(false, true, null) && !NpcapConfigured(true, false, 0));
+        Check(!CanProvision(true, true, 0, null)); // Never provision without a verified pairing GO.
+        Check(CanProvision(true, true, 1, 36));
+        Check(!CanProvision(false, true, 0, null) && !CanProvision(true, false, 0, null));
+        Check(!CanProvision(true, true, 2, 36) && !CanProvision(true, true, 1, 64));
+        Check(CanProvision(true, true, 1, null)); // ReadPairing returns null only for channel-query error 5023 on the same GO.
+        Check(!CanProvision(false, true, 1, null) && !CanProvision(true, false, 1, null) && !CanProvision(true, true, 2, null));
+        Check(CanProvision(true, true, 1, 149));
+        Check(CanProvision(true, true, 1, 6) && CanProvision(true, true, 1, 11));
+        var bandGuard = new SetupBandGuard(); bandGuard.Observe(0, null); bandGuard.Observe(1, null);
+        bool bandRejected = false; try { bandGuard.Complete(); } catch (PairingNetworkException) { bandRejected = true; } Check(bandRejected);
+        bandGuard.Observe(1, 36); bandGuard.Complete(); Check(bandGuard.Verified);
+        bandGuard.Observe(1, 11); bandGuard.Complete(); Check(bandGuard.Verified);
+        bandRejected = false; try { new SetupBandGuard().Observe(2, 36); } catch (PairingNetworkException) { bandRejected = true; } Check(bandRejected);
         const string valid = "{\"schema\":1,\"wifi_guid\":\"11111111-1111-1111-1111-111111111111\",\"uplink_guid\":\"22222222-2222-2222-2222-222222222222\",\"controller_mac\":[2,1,2,3,4,5],\"channel\":36,\"ssid\":\"DIRECT-TEST\",\"passphrase\":\"SyntheticOnly123\"}";
         byte[] bytes = Encoding.UTF8.GetBytes(valid); var value = Configuration.Parse(bytes);
         Check(value.Channel == 36 && value.ControllerMac.SequenceEqual(new[] { 2, 1, 2, 3, 4, 5 }));
@@ -42,9 +55,13 @@ internal static partial class Program
         { bool rejected = false; try { RecoveryState.Parse(Encoding.UTF8.GetBytes(invalidRecovery), value); } catch (FormatException) { rejected = true; } Check(rejected); }
         foreach (string invalid in new[] { valid.Replace("\"schema\":1", "\"schema\":2"), valid.Replace("\"schema\":1", "\"schema\":1,\"schema\":1"),
             valid.Replace("\"schema\":1", "\"schema\":1,\"unknown\":1"), valid.Replace("[2,1,2,3,4,5]", "[3,1,2,3,4,5]"), valid.Replace("[2,1,2,3,4,5]", "null"),
-            valid.Replace("36", "149"), valid.Replace("SyntheticOnly123", "short"), valid.Replace("DIRECT-TEST", "DIRECT-\u00e9"), valid.Replace("\"passphrase\":\"SyntheticOnly123\"", "\"passphrase\":null") })
+            valid.Replace("36", "64"), valid.Replace("SyntheticOnly123", "short"), valid.Replace("DIRECT-TEST", "DIRECT-\u00e9"), valid.Replace("\"passphrase\":\"SyntheticOnly123\"", "\"passphrase\":null") })
         { bool rejected = false; try { Configuration.Parse(Encoding.UTF8.GetBytes(invalid)); } catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException) { rejected = true; } Check(rejected); }
         Check(OwnsSuccessfulStart(TetheringOperationStatus.Success) && !OwnsSuccessfulStart(TetheringOperationStatus.AlreadyOn));
+        Check(ExpectedHostCompletion(true, 0, true, true, true));
+        Check(!ExpectedHostCompletion(false, 0, true, true, true)); // A clean unrequested watchdog exit is still a failed session.
+        Check(!ExpectedHostCompletion(true, 1, true, true, true) && !ExpectedHostCompletion(true, 0, false, true, true));
+        Check(!ExpectedHostCompletion(true, 0, true, false, true) && !ExpectedHostCompletion(true, 0, true, true, false));
         Check(EmptyHotspot(TetheringOperationalState.Off, 0) && !EmptyHotspot(TetheringOperationalState.Off, 1));
         var late = await CancelAndSettle(() => throw new InvalidOperationException(), Task.FromResult(7), TimeSpan.FromMilliseconds(1));
         Check(late.HasResult && late.Result == 7 && late.CancelCallFailed && !late.Pending);
@@ -54,7 +71,9 @@ internal static partial class Program
         var cancelled = await CancelAndSettle(() => { }, Task.FromCanceled<int>(new CancellationToken(true)), TimeSpan.FromMilliseconds(1));
         Check(!cancelled.HasResult && !cancelled.Pending);
         Check(new UTF8Encoding(false).GetBytes("alive\n").SequenceEqual(new byte[] { 97, 108, 105, 118, 101, 10 }));
-        Check(ChannelInspection.IsExpectedChannel(36) && ChannelInspection.IsExpectedChannel(11) && !ChannelInspection.IsExpectedChannel(149));
+        Check(ChannelInspection.IsExpectedChannel(36) && !ChannelInspection.IsExpectedChannel(11) && ChannelInspection.IsExpectedChannel(149) && !ChannelInspection.IsExpectedChannel(64));
+        Check(ChannelInspection.IsGroupOwnerMode(0x20));
+        Check(!ChannelInspection.IsGroupOwnerMode(0x4) && !ChannelInspection.IsGroupOwnerMode(0x10) && !ChannelInspection.IsGroupOwnerMode(0x40) && !ChannelInspection.IsGroupOwnerMode(null));
         byte[] attributes = new byte[604]; attributes[0] = 1; attributes[520] = 4; Encoding.ASCII.GetBytes("TEST").CopyTo(attributes, 524);
         Check(ChannelInspection.SsidEquals(attributes, "TEST") && !ChannelInspection.SsidEquals(attributes, "test"));
         attributes[520] = 33; bool malformed = false;
@@ -68,11 +87,30 @@ internal static partial class Program
         Check(ForgetAllowed(false, 0, TetheringOperationalState.Off, 0));
         Check(!ForgetAllowed(true, 0, TetheringOperationalState.Off, 0) && !ForgetAllowed(false, 1, TetheringOperationalState.Off, 0) && !ForgetAllowed(false, 0, TetheringOperationalState.On, 0) && !ForgetAllowed(false, 0, TetheringOperationalState.Off, 1));
         var readiness = new HostResult();
-        Check(ApplyReadiness("expected-controller-session", null, readiness) is null && readiness.XinputSlot is null && readiness.ExpectedControllerSession);
+        using var firmware = System.Text.Json.JsonDocument.Parse("{\"version\":\"1.96/99/3.71/0.32\"}");
+        using var invalidFirmware = System.Text.Json.JsonDocument.Parse("{\"version\":\"1.96/999/3.71/0.32\"}");
+        Check(!ApplyFirmware(firmware.RootElement, readiness) && readiness.FirmwareVersion is null);
+        Check(ApplyReadiness("transport-ready", null, readiness) is null && !readiness.ExpectedControllerSession);
+        Check(ApplyReadiness("expected-controller-session", null, readiness) == "controller-detected" && readiness.XinputSlot is null && readiness.ExpectedControllerSession);
+        Check(ApplyFirmware(firmware.RootElement, readiness) && readiness.FirmwareVersion == "1.96/99/3.71/0.32");
+        Check(!ApplyFirmware(invalidFirmware.RootElement, readiness) && readiness.FirmwareVersion == "1.96/99/3.71/0.32");
         Check(ApplyReadiness("xinput-ready", 0, readiness) == "connected" && readiness.XinputSlot == 0);
-        Check(ApplyReadiness("stale-input-released", null, readiness) == "disconnected" && readiness.XinputSlot is null);
+        Check(ApplyReadiness("stale-input-released", null, readiness) == "disconnected" && readiness.XinputSlot is null && readiness.ExpectedControllerSession);
         Check(ApplyReadiness("xinput-ready", 0, readiness) == "connected" && readiness.XinputSlot == 0);
         Check(ApplyReadiness("expected-controller-session", null, readiness) == "disconnected" && readiness.XinputSlot is null);
+        Check(readiness.FirmwareVersion is null);
+        Check(ApplyFirmware(firmware.RootElement, readiness));
+        Check(ApplyReadiness("controller-session-released", null, readiness) == "controller-lost");
+        Check(readiness.FirmwareVersion is null && !readiness.ExpectedControllerSession && !ApplyFirmware(firmware.RootElement, readiness));
+        Check(ApplyReadiness("controller-session-released", null, readiness) is null);
+        Check(ApplyReadiness("expected-controller-resumed", null, readiness) == "controller-detected" && readiness.ExpectedControllerSession && readiness.XinputSlot is null);
+        Check(ApplyFirmware(firmware.RootElement, readiness));
+        Check(ApplyReadiness("xinput-ready", 0, readiness) == "connected");
+        Check(ApplyReadiness("expected-controller-resumed", null, readiness) is null && readiness.XinputSlot == 0 && readiness.FirmwareVersion == "1.96/99/3.71/0.32");
+        Check(ApplyReadiness("controller-session-released", null, readiness) == "disconnected" && !readiness.ExpectedControllerSession && readiness.XinputSlot is null);
+        Check(ApplyReadiness("expected-controller-session", null, readiness) == "controller-detected");
+        Check(ApplyFirmware(firmware.RootElement, readiness));
+        Check(ApplyReadiness("data-host-released", null, readiness) == "controller-lost" && !readiness.ExpectedControllerSession && readiness.FirmwareVersion is null);
         bool slotRejected = false; try { ApplyReadiness("xinput-ready", 4, readiness); } catch (InvalidDataException) { slotRejected = true; } Check(slotRejected);
         Log("selftest-passed", new { checks = count, native_radio_calls = 0, configuration_loaded = false });
         return 0;
