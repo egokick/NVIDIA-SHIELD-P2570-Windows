@@ -13,13 +13,13 @@ This app allows the controller to connect directly to your computer over Wi-fi, 
 
 No accounts. No terminal commands. No dependency hunting. First-time setup needs Internet access.
 
-<p align="center"><img src="docs/images/your-controls.png" width="880" alt="The SHIELD tray app shows Connected wirelessly, a trackpad speed slider, individual button mappings and Reset all controls to default." /></p>
+<p align="center"><img src="docs/images/your-controls.png" width="880" alt="The SHIELD tray app shows Connected wirelessly, independent trackpad and joystick speed sliders, movement menus, button mappings and Reset all controls to default." /></p>
 
-**Make it yours.** Adjust trackpad speed, change any button, or reset everything with one click. Closing the window keeps your controller running in the tray.
+**Make it yours.** Move the cursor with either stick or the trackpad, adjust each speed, and choose what your buttons do. [Tune your sticks](docs/joystick-controls.md), or reset everything with one click. Closing the window keeps your controller running in the tray.
 
 Your **NVIDIA SHIELD P2570 connects directly to your computer over Wi-Fi**. The controller hardware supports **2.4 GHz and 5 GHz**; your router is not involved in this connection.
 
-The app prefers **5 GHz**, then uses **2.4 GHz** when 5 GHz is unavailable. Choose either band in **Settings → Controller Wi-Fi band**. Ethernet is the recommended Internet connection. [Check compatibility](docs/compatibility.md) · [Pairing picture and help](docs/guide.md)
+The app prefers **5 GHz**, then uses **2.4 GHz** when 5 GHz is unavailable. Choose either band in **Settings → Controller Wi-Fi band**. [Check compatibility](docs/compatibility.md) · [Pairing picture and help](docs/guide.md)
 
 [Linux preview and macOS status](docs/platforms.md) · [Build from source](BUILDING.md) · [All releases](https://github.com/egokick/NVIDIA-SHIELD-P2570-Windows/releases)
 

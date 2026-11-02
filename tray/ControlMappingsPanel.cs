@@ -14,17 +14,31 @@ internal sealed class ControlMappingsPanel : Panel
     private readonly Label slow = Label("Precise", 9), fast = Label("Fast", 9), saveStatus = Label("Changes save automatically", 9);
     private readonly Button reset = new ResetControlsButton { Text = "↺   Reset all controls to default", AccessibleName = "Reset all controls to default" };
     private readonly List<(Label Heading, MappingRow[] Rows)> groups = [];
+    private readonly Label sticksHeading = Label("JOYSTICK MOVEMENT", 8.5f, true);
+    private readonly StickMovementCard leftStick, rightStick;
+    private readonly MappingPicker dpadMode = new() { AccessibleName = "D-pad movement preset" };
     private readonly System.Windows.Forms.Timer saveTimer = new() { Interval = 180 };
     private ControlProfile profile;
     private bool updating;
-    internal const int LogicalHeight = 770;
-    internal static int HeightForWidth(int width, int dpi) => (int)Math.Round((width < 550 * dpi / 96f ? 1070 : LogicalHeight) * dpi / 96f);
+    internal event EventHandler? ContentHeightChanged;
+    internal int RequiredHeight(int width, int dpi)
+    {
+        bool narrow = width < 550 * dpi / 96f;
+        int sticksHeight = narrow ? leftStick.LogicalHeight + rightStick.LogicalHeight + 12 : Math.Max(leftStick.LogicalHeight, rightStick.LogicalHeight);
+        return (int)Math.Round(((narrow ? 1070 : 770) + sticksHeight + 70) * dpi / 96f);
+    }
 
     internal ControlMappingsPanel(ControlProfile profile, Action<ControlProfile> onChanged)
     {
         this.profile = profile.Copy(); changed = onChanged;
+        leftStick = new("Left joystick", (value, debounce) => StickChanged(true, value, debounce));
+        rightStick = new("Right joystick", (value, debounce) => StickChanged(false, value, debounce));
+        foreach (var stick in new[] { leftStick, rightStick }) stick.ExpansionChanged += (_, _) => { PerformLayout(); ContentHeightChanged?.Invoke(this, EventArgs.Empty); };
         BackColor = Palette.Background; DoubleBuffered = true;
-        Controls.AddRange([title, subtitle, sensitivityCard, reset, saveStatus]);
+        Controls.AddRange([title, subtitle, sensitivityCard, sticksHeading, leftStick, rightStick, dpadMode, reset, saveStatus]);
+        sticksHeading.ForeColor = Palette.Muted;
+        dpadMode.SetItems([new("Arrow keys", "arrows"), new("Cursor", "cursor"), new("Custom · choose below", "custom")]);
+        dpadMode.SelectedIndexChanged += (_, _) => { if (!updating && dpadMode.SelectedItem is { } selected) SetDpadMode(selected.Kind); };
         subtitle.ForeColor = Palette.Muted; saveStatus.ForeColor = Palette.Muted;
         sensitivityCard.Controls.AddRange([sensitivityTitle, sensitivityValue, sensitivity, slow, fast, calibrationTitle, calibrationDetail]);
         sensitivityValue.TextAlign = ContentAlignment.MiddleRight; sensitivity.BackColor = Color.White;
@@ -61,10 +75,37 @@ internal sealed class ControlMappingsPanel : Panel
     private void BindingChanged(string id, ControlBinding value)
     {
         if (updating) return;
-        saveTimer.Stop(); profile.Bindings[id] = value; Publish();
+        saveTimer.Stop(); profile.Bindings[id] = value; UpdateDpadMode(); Publish();
+    }
+    private void StickChanged(bool left, StickSettings value, bool debounce)
+    {
+        if (updating) return;
+        if (left) profile.Sticks.Left = value; else profile.Sticks.Right = value;
+        SetSaveStatus("Saving…"); saveTimer.Stop();
+        if (debounce) saveTimer.Start(); else Publish();
+    }
+    internal void SetDpadMode(string mode)
+    {
+        if (mode is not ("arrows" or "cursor")) { UpdateDpadMode(); return; }
+        saveTimer.Stop(); var defaults = ProfileStore.Defaults();
+        foreach (string id in ProfileStore.DpadIds) profile.Bindings[id] = mode == "cursor" ? new() { Kind = "cursor" } : defaults.Bindings[id];
+        SetProfile(profile); Publish();
+    }
+    private void UpdateDpadMode()
+    {
+        bool before = updating; updating = true;
+        try {
+            var defaults = ProfileStore.Defaults();
+            dpadMode.SelectedIndex = ProfileStore.DpadIds.All(id => profile.Bindings[id].Kind == "cursor") ? 1 :
+                ProfileStore.DpadIds.All(id => profile.Bindings[id] == defaults.Bindings[id]) ? 0 : 2;
+        } finally { updating = before; }
     }
     private void Publish() { changed(profile.Copy()); }
     internal SensitivitySlider SensitivityControl => sensitivity;
+    internal StickMovementCard LeftStick => leftStick;
+    internal StickMovementCard RightStick => rightStick;
+    internal MappingPicker DpadModePicker => dpadMode;
+    internal void ExpandStickOptions() { if (!leftStick.Expanded) leftStick.ToggleAdvanced(); if (!rightStick.Expanded) rightStick.ToggleAdvanced(); }
     internal IEnumerable<MappingRow> MappingRows => groups.SelectMany(group => group.Rows);
     internal void ResetDefaults() { saveTimer.Stop(); SetProfile(ProfileStore.Defaults()); Publish(); }
     internal void SavePendingChanges() { saveTimer.Stop(); Publish(); }
@@ -78,8 +119,9 @@ internal sealed class ControlMappingsPanel : Panel
         updating = true;
         try {
             profile = value.Copy(); sensitivity.Value = (int)Math.Round(profile.Sensitivity * 100);
+            leftStick.SetSettings(profile.Sticks.Left); rightStick.SetSettings(profile.Sticks.Right);
             foreach (var group in groups) foreach (var row in group.Rows) row.SetBinding(profile.Bindings[row.Id]);
-            UpdateSensitivityLabel();
+            UpdateSensitivityLabel(); UpdateDpadMode();
         } finally { updating = false; }
     }
     internal void SetCalibration(string title, string detail)
@@ -106,8 +148,14 @@ internal sealed class ControlMappingsPanel : Panel
         calibrationTitle.SetBounds(inner, S(94), cardWidth, S(17)); calibrationDetail.SetBounds(inner, S(111), cardWidth, S(17));
         int y = S(232), gap = S(16), columns = ClientSize.Width < S(550) ? 1 : 2;
         int column = (width - gap * (columns - 1)) / columns;
+        sticksHeading.SetBounds(left, y, width, S(18)); y += S(25);
+        leftStick.SetBounds(left, y, column, S(leftStick.LogicalHeight));
+        if (columns == 2) rightStick.SetBounds(left + column + gap, y, column, S(rightStick.LogicalHeight));
+        else rightStick.SetBounds(left, y + S(leftStick.LogicalHeight + 12), column, S(rightStick.LogicalHeight));
+        y += S(columns == 2 ? Math.Max(leftStick.LogicalHeight, rightStick.LogicalHeight) : leftStick.LogicalHeight + rightStick.LogicalHeight + 12) + S(16);
         foreach (var group in groups) {
             group.Heading.SetBounds(left, y, width, S(18)); y += S(22);
+            if (group.Rows[0].Id.StartsWith("dpad_", StringComparison.Ordinal)) { dpadMode.SetBounds(left, y, width, S(31)); y += S(37); }
             for (int i = 0; i < group.Rows.Length; i++) {
                 group.Rows[i].SetBounds(left + (i % columns) * (column + gap), y + (i / columns) * S(34), column, S(31));
             }
@@ -117,6 +165,88 @@ internal sealed class ControlMappingsPanel : Panel
         saveStatus.SetBounds(left, y + S(51), width, S(23));
     }
     protected override void Dispose(bool disposing) { if (disposing) saveTimer.Dispose(); base.Dispose(disposing); }
+}
+
+internal sealed class StickMovementCard : RoundedCard
+{
+    private readonly Label title, speedTitle = Caption("Cursor speed", true), speedValue = Caption("100%", true);
+    private readonly Label curveTitle = Caption("Response"), curveHelp = Caption(""), deadzoneTitle = Caption("Ignore tiny movements"), deadzoneValue = Caption("20%"), smoothTitle = Caption("Smoothing"), smoothHelp = Caption("Off feels most direct.");
+    private readonly MappingPicker movement = new(), curve = new(), smoothing = new();
+    private readonly SensitivitySlider speed = new(), deadzone = new(0, 35, 1);
+    private readonly Button feel = new();
+    private readonly Action<StickSettings, bool> changed;
+    private StickSettings settings = new();
+    private bool updating, expanded;
+    internal event EventHandler? ExpansionChanged;
+    internal int LogicalHeight => expanded && settings.Mode != "none" ? 419 : 184;
+    internal bool Expanded => expanded;
+    internal MappingPicker MovementPicker => movement;
+    internal MappingPicker CurvePicker => curve;
+    internal MappingPicker SmoothingPicker => smoothing;
+    internal SensitivitySlider SpeedSlider => speed;
+    internal SensitivitySlider DeadzoneSlider => deadzone;
+    internal StickSettings CurrentSettings => settings with { };
+    internal StickMovementCard(string name, Action<StickSettings, bool> onChanged)
+    {
+        changed = onChanged; title = Caption(name, true); title.Font = new Font("Segoe UI Semibold", 12);
+        Controls.AddRange([title, movement, speedTitle, speedValue, speed, feel, curveTitle, curve, curveHelp, deadzoneTitle, deadzoneValue, deadzone, smoothTitle, smoothing, smoothHelp]);
+        movement.AccessibleName = name + " movement"; speed.AccessibleName = name + " cursor speed";
+        curve.AccessibleName = name + " response curve"; deadzone.AccessibleName = name + " dead zone"; smoothing.AccessibleName = name + " smoothing";
+        movement.SetItems([new("Cursor", "cursor"), new("Arrow keys", "arrows"), new("W A S D", "wasd"), new("Gamepad only", "none")]);
+        curve.SetItems([new("Precise · recommended", "precise"), new("Linear", "linear"), new("Quick", "quick")]);
+        smoothing.SetItems([new("Off · recommended", "off"), new("Light", "light"), new("Steady", "steady")]);
+        feel.FlatStyle = FlatStyle.Flat; feel.FlatAppearance.BorderSize = 0; feel.BackColor = Color.White; feel.ForeColor = Palette.Muted;
+        feel.Font = new Font("Segoe UI", 9); feel.TextAlign = ContentAlignment.MiddleLeft; feel.Cursor = Cursors.Hand; feel.UseMnemonic = false;
+        feel.Click += (_, _) => ToggleAdvanced();
+        speedValue.TextAlign = deadzoneValue.TextAlign = ContentAlignment.MiddleRight;
+        speed.BackColor = deadzone.BackColor = Color.White;
+        movement.SelectedIndexChanged += (_, _) => { if (updating || movement.SelectedItem is not { } item) return; int before = LogicalHeight; settings.Mode = item.Kind; UpdateLabels(); changed(settings with { }, false); if (before != LogicalHeight) ExpansionChanged?.Invoke(this, EventArgs.Empty); };
+        curve.SelectedIndexChanged += (_, _) => { if (updating || curve.SelectedItem is not { } item) return; settings.Curve = item.Kind; UpdateLabels(); changed(settings with { }, false); };
+        smoothing.SelectedIndexChanged += (_, _) => { if (updating || smoothing.SelectedItem is not { } item) return; settings.Smoothing = item.Kind; UpdateLabels(); changed(settings with { }, false); };
+        speed.ValueChanged += (_, _) => { if (updating) return; settings.Sensitivity = speed.Value / 100.0; UpdateLabels(); changed(settings with { }, true); };
+        deadzone.ValueChanged += (_, _) => { if (updating) return; settings.Deadzone = deadzone.Value / 100.0; UpdateLabels(); changed(settings with { }, true); };
+        SetSettings(settings);
+    }
+    private static Label Caption(string text, bool bold = false) => new() { Text = text, Font = new Font(bold ? "Segoe UI Semibold" : "Segoe UI", 9), ForeColor = bold ? Palette.Ink : Palette.Muted, BackColor = Color.Transparent, TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false };
+    internal void SetSettings(StickSettings value)
+    {
+        int before = LogicalHeight; updating = true;
+        try {
+            settings = value with { };
+            movement.SelectedIndex = Array.IndexOf(new[] { "cursor", "arrows", "wasd", "none" }, value.Mode);
+            curve.SelectedIndex = Array.IndexOf(new[] { "precise", "linear", "quick" }, value.Curve);
+            smoothing.SelectedIndex = Array.IndexOf(new[] { "off", "light", "steady" }, value.Smoothing);
+            speed.Value = (int)Math.Round(value.Sensitivity * 100); deadzone.Value = (int)Math.Round(value.Deadzone * 100);
+            UpdateLabels();
+        } finally { updating = false; }
+        if (before != LogicalHeight) ExpansionChanged?.Invoke(this, EventArgs.Empty);
+    }
+    internal void ToggleAdvanced() { expanded = !expanded; UpdateLabels(); PerformLayout(); ExpansionChanged?.Invoke(this, EventArgs.Empty); }
+    private void UpdateLabels()
+    {
+        speedValue.Text = $"{speed.Value}%"; deadzoneValue.Text = $"{deadzone.Value}%";
+        speed.AccessibleDescription = $"{speed.Value} percent of display-calibrated cursor speed";
+        deadzone.AccessibleDescription = $"Ignore movement within {deadzone.Value} percent of the centre";
+        bool cursor = settings.Mode == "cursor";
+        speed.Enabled = cursor; feel.Enabled = settings.Mode != "none"; speedTitle.Text = cursor ? "Cursor speed" : settings.Mode == "none" ? "Desktop movement off" : "Keys follow direction";
+        speedValue.Visible = speed.Visible = cursor;
+        feel.Text = expanded ? "▴  Feel & drift" : "▾  Feel & drift";
+        foreach (var control in new Control[] { curveTitle, curve, curveHelp, deadzoneTitle, deadzoneValue, deadzone, smoothTitle, smoothing, smoothHelp }) control.Visible = expanded && settings.Mode != "none";
+        curve.Enabled = smoothing.Enabled = cursor;
+        curveHelp.Text = !cursor ? "Response curves apply to cursor movement." : settings.Curve switch { "linear" => "Speed follows your stick evenly.", "quick" => "Reach fast movement sooner.", _ => "Small tilts are gentle. Push farther to go faster." };
+        smoothHelp.Text = !cursor ? "Keyboard directions respond immediately." : settings.Smoothing switch { "light" => "Softens tiny changes; adds a little delay.", "steady" => "More smoothing; a softer, slower response.", _ => "Off feels most direct." };
+    }
+    protected override void OnLayout(LayoutEventArgs levent)
+    {
+        base.OnLayout(levent); float scale = DeviceDpi / 96f; int S(int x) => (int)Math.Round(x * scale);
+        int x = S(14), width = Math.Max(S(100), ClientSize.Width - x * 2);
+        title.SetBounds(x, S(10), width, S(26)); movement.SetBounds(x, S(43), width, S(30));
+        speedTitle.SetBounds(x, S(84), width - S(55), S(19)); speedValue.SetBounds(x + width - S(55), S(84), S(55), S(19));
+        speed.SetBounds(x, S(105), width, S(34)); feel.SetBounds(x - S(4), S(146), width + S(8), S(29));
+        curveTitle.SetBounds(x, S(187), width, S(18)); curve.SetBounds(x, S(207), width, S(30)); curveHelp.SetBounds(x, S(242), width, S(31));
+        deadzoneTitle.SetBounds(x, S(281), width - S(42), S(19)); deadzoneValue.SetBounds(x + width - S(42), S(281), S(42), S(19)); deadzone.SetBounds(x, S(302), width, S(31));
+        smoothTitle.SetBounds(x, S(338), width, S(18)); smoothing.SetBounds(x, S(358), width, S(30)); smoothHelp.SetBounds(x, S(392), width, S(23));
+    }
 }
 
 internal sealed class MappingRow : Panel
@@ -155,7 +285,7 @@ internal sealed class MappingRow : Panel
         loading = true;
         try {
             binding = new ControlBinding { Kind = value.Kind, Key = value.Key, Path = value.Path };
-            var items = MappingChoices.All.ToList();
+            var items = MappingChoices.ForControl(Id).ToList();
             int selected = -1;
             for (int i = 0; i < items.Count; i++) if (items[i].Matches(binding)) { selected = i; break; }
             if (selected < 0) {
@@ -265,8 +395,8 @@ internal sealed class MappingPicker : Button
             return entry;
         }
         for (int i = 0; i < items.Length; i++) if (items[i].Kind != "key") menu.Items.Add(Entry(i));
-        menu.Items.Add(new ToolStripSeparator());
-        var keyboard = new ToolStripMenuItem("Keyboard keys"); menu.Items.Add(keyboard);
+        ToolStripMenuItem? keyboard = null;
+        if (items.Any(item => item.Kind == "key")) { keyboard = new("Keyboard keys"); menu.Items.Add(new ToolStripSeparator()); menu.Items.Add(keyboard); }
         string Group(int key) => key switch {
             >= 0x41 and <= 0x5A => "Letters A–Z", >= 0x30 and <= 0x39 => "Numbers 0–9",
             >= 0x70 and <= 0x87 => "Function keys F1–F24", >= 0x60 and <= 0x6F => "Number pad",
@@ -277,7 +407,7 @@ internal sealed class MappingPicker : Button
         foreach (var group in items.Select((item, index) => (item, index)).Where(pair => pair.item.Kind == "key").GroupBy(pair => Group(pair.item.Key!.Value))) {
             var category = new ToolStripMenuItem(group.Key);
             foreach (var pair in group) category.DropDownItems.Add(Entry(pair.index));
-            keyboard.DropDownItems.Add(category);
+            keyboard!.DropDownItems.Add(category);
         }
         return menu;
     }
@@ -298,11 +428,11 @@ internal sealed class MappingPicker : Button
         e.Graphics.Clear(Parent?.BackColor ?? Palette.Background); e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         float s = DeviceDpi / 96f; bool contrast = SystemInformation.HighContrast;
         using var path = Palette.Round(new RectangleF(1, 1, Width - 3, Height - 3), 7 * s);
-        using var fill = new SolidBrush(contrast ? SystemColors.Window : hover ? Palette.Soft : Color.White);
+        using var fill = new SolidBrush(!Enabled ? SystemColors.Control : contrast ? SystemColors.Window : hover ? Palette.Soft : Color.White);
         using var outline = new Pen(contrast ? SystemColors.WindowText : Color.FromArgb(214, 223, 209));
         e.Graphics.FillPath(fill, path); e.Graphics.DrawPath(outline, path);
         var text = new Rectangle((int)(9 * s), 0, Width - (int)(32 * s), Height);
-        TextRenderer.DrawText(e.Graphics, Text, Font, text, contrast ? SystemColors.WindowText : Palette.Ink, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        TextRenderer.DrawText(e.Graphics, Text, Font, text, !Enabled ? SystemColors.GrayText : contrast ? SystemColors.WindowText : Palette.Ink, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         float x = Width - 14 * s, y = Height / 2f;
         using var pen = new Pen(contrast ? SystemColors.WindowText : Palette.Muted, 1.5f * s);
         e.Graphics.DrawLines(pen, [new PointF(x - 3 * s, y - 1.5f * s), new PointF(x, y + 1.5f * s), new PointF(x + 3 * s, y - 1.5f * s)]);
@@ -319,6 +449,7 @@ internal sealed record MappingChoice(string Label, string Kind, int? Key = null,
 internal static class MappingChoices
 {
     internal static readonly MappingChoice[] All = Build();
+    internal static IEnumerable<MappingChoice> ForControl(string id) => ProfileStore.DpadIds.Contains(id) ? new[] { new MappingChoice("Cursor", "cursor") }.Concat(All) : All;
     private static MappingChoice[] Build()
     {
         var items = new List<MappingChoice> {
@@ -371,23 +502,24 @@ internal sealed class KeyCaptureForm : Form
 internal sealed class SensitivitySlider : Control
 {
     private int value = 100;
+    private readonly int minimum, maximum, step;
     private bool dragging;
     internal event EventHandler? ValueChanged;
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-    internal int Value { get => value; set { int next = Math.Clamp(value, 25, 300); if (this.value == next) return; this.value = next; Invalidate(); AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1); ValueChanged?.Invoke(this, EventArgs.Empty); } }
-    internal SensitivitySlider() { DoubleBuffered = true; TabStop = true; Cursor = Cursors.Hand; AccessibleRole = AccessibleRole.Slider; SetStyle(ControlStyles.Selectable | ControlStyles.ResizeRedraw, true); }
-    private void FromPointer(int x) { int inset = (int)Math.Round(13 * DeviceDpi / 96f); Value = (int)Math.Round((25 + 275.0 * Math.Clamp((x - inset) / (double)Math.Max(1, Width - inset * 2), 0, 1)) / 5) * 5; }
+    internal int Value { get => value; set { int next = Math.Clamp(value, minimum, maximum); if (this.value == next) return; this.value = next; Invalidate(); AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1); ValueChanged?.Invoke(this, EventArgs.Empty); } }
+    internal SensitivitySlider(int minimum = 25, int maximum = 300, int step = 5) { this.minimum = minimum; this.maximum = maximum; this.step = step; value = Math.Clamp(value, minimum, maximum); DoubleBuffered = true; TabStop = true; Cursor = Cursors.Hand; AccessibleRole = AccessibleRole.Slider; SetStyle(ControlStyles.Selectable | ControlStyles.ResizeRedraw, true); }
+    private void FromPointer(int x) { int inset = (int)Math.Round(13 * DeviceDpi / 96f); Value = (int)Math.Round((minimum + (maximum - minimum) * Math.Clamp((x - inset) / (double)Math.Max(1, Width - inset * 2), 0, 1)) / step) * step; }
     protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (e.Button != MouseButtons.Left) return; Focus(); Capture = dragging = true; FromPointer(e.X); }
     protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (dragging) FromPointer(e.X); }
     protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); if (e.Button == MouseButtons.Left) { dragging = false; Capture = false; } }
     protected override bool IsInputKey(Keys keyData) => (keyData & Keys.KeyCode) is Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.Home or Keys.End || base.IsInputKey(keyData);
-    protected override void OnKeyDown(KeyEventArgs e) { base.OnKeyDown(e); switch (e.KeyCode) { case Keys.Left: case Keys.Down: Value -= 5; break; case Keys.Right: case Keys.Up: Value += 5; break; case Keys.Home: Value = 25; break; case Keys.End: Value = 300; break; default: return; } e.Handled = true; }
+    protected override void OnKeyDown(KeyEventArgs e) { base.OnKeyDown(e); switch (e.KeyCode) { case Keys.Left: case Keys.Down: Value -= step; break; case Keys.Right: case Keys.Up: Value += step; break; case Keys.Home: Value = minimum; break; case Keys.End: Value = maximum; break; default: return; } e.Handled = true; }
     protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
     protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e); e.Graphics.SmoothingMode = SmoothingMode.AntiAlias; float s = DeviceDpi / 96f;
-        float inset = 13 * s, width = Math.Max(1, Width - inset * 2), x = inset + width * (Value - 25) / 275f, y = Height / 2f;
+        float inset = 13 * s, width = Math.Max(1, Width - inset * 2), x = inset + width * (Value - minimum) / (maximum - minimum), y = Height / 2f;
         using var track = new Pen(SystemInformation.HighContrast ? SystemColors.GrayText : Palette.Soft, 8 * s) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         using var active = new Pen(SystemInformation.HighContrast ? SystemColors.Highlight : Palette.Green, 8 * s) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         e.Graphics.DrawLine(track, inset, y, inset + width, y); e.Graphics.DrawLine(active, inset, y, x, y);
@@ -397,7 +529,7 @@ internal sealed class SensitivitySlider : Control
     }
 }
 
-internal sealed class RoundedCard : Panel
+internal class RoundedCard : Panel
 {
     internal RoundedCard() { DoubleBuffered = true; BackColor = Palette.Background; SetStyle(ControlStyles.ResizeRedraw, true); }
     protected override void OnPaintBackground(PaintEventArgs e)

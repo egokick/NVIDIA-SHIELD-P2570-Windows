@@ -1,5 +1,6 @@
 use crate::controller::Trackpad;
 use anyhow::Result;
+use std::time::{Duration, Instant};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
@@ -69,6 +70,8 @@ pub struct Mouse {
     motion: Motion,
     gain: f64,
     sensitivity: f64,
+    cursor_gain: f64,
+    cursor_calibration_due: Option<Instant>,
 }
 impl Default for Mouse {
     fn default() -> Self {
@@ -76,6 +79,8 @@ impl Default for Mouse {
             motion: Motion::default(),
             gain: 4.0,
             sensitivity: 1.0,
+            cursor_gain: 4.0,
+            cursor_calibration_due: None,
         }
     }
 }
@@ -97,6 +102,21 @@ impl Mouse {
     }
     pub fn sensitivity(&mut self, value: f64) {
         self.sensitivity = value;
+    }
+    pub fn cursor_speed(&mut self) -> f64 {
+        let now = Instant::now();
+        if self.cursor_calibration_due.is_none_or(|due| now >= due) {
+            if let Ok(calibration) = crate::display::calibration() {
+                self.cursor_gain = calibration.default_gain;
+            }
+            self.cursor_calibration_due = Some(now + Duration::from_secs(1));
+        }
+        // Separate from trackpad sensitivity. 1000 px/s is the 32-inch 1080p
+        // baseline; resolution and physical size use the shared display model.
+        1000.0 * self.cursor_gain / 4.0
+    }
+    pub fn cursor_motion(&mut self, x: i32, y: i32) -> Result<()> {
+        self.send(x, y)
     }
     fn send(&mut self, dx: i32, dy: i32) -> Result<()> {
         let flags = self.motion.flags(dx, dy);
@@ -127,6 +147,7 @@ impl Mouse {
         self.motion.remainder = (0.0, 0.0);
         self.motion.trackpad_buttons = 0;
         self.motion.pad_buttons = 0;
+        self.cursor_calibration_due = None;
         self.send(0, 0)
     }
 }

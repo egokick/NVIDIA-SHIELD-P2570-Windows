@@ -22,6 +22,7 @@ mod diagnostic;
 mod display;
 mod launch;
 mod profile;
+mod stick;
 use diagnostic::{Code, checkpoint};
 mod keyboard;
 mod lease;

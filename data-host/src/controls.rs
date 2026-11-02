@@ -4,10 +4,11 @@ use crate::{
     keyboard::{self, Timing},
     mouse::Mouse,
     profile::{Action, IDS, Profile, Watcher},
+    stick::Movement,
 };
 use anyhow::Result;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     time::{Duration, Instant},
 };
 
@@ -16,6 +17,8 @@ trait Sink {
     fn mouse(&mut self, buttons: u8) -> Result<()>;
     fn volume(&mut self, increase: bool);
     fn launch(&mut self, path: &str);
+    fn cursor_speed(&mut self) -> f64;
+    fn cursor(&mut self, x: i32, y: i32) -> Result<()>;
 }
 fn physical(p: &Pad, previous: &[bool; 19]) -> [bool; 19] {
     let trigger = |value: u16, held: bool| if held { value > 26214 } else { value >= 32768 };
@@ -56,6 +59,8 @@ struct Engine {
     blocked: [bool; 19],
     held: BTreeMap<u16, Option<Instant>>,
     volume: [Option<Instant>; 2],
+    movement: Movement,
+    last_pad: Option<Pad>,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -65,18 +70,31 @@ impl Default for Engine {
             blocked: [false; 19],
             held: BTreeMap::new(),
             volume: [None; 2],
+            movement: Movement::default(),
+            last_pad: None,
         }
     }
 }
 impl Engine {
-    fn profile(&mut self, profile: Profile, sink: &mut impl Sink) -> Result<()> {
+    fn profile(
+        &mut self,
+        profile: Profile,
+        now: Instant,
+        timing: Timing,
+        sink: &mut impl Sink,
+    ) -> Result<()> {
         if profile.bindings != self.profile.bindings {
-            let physical = self.physical;
-            self.release(sink)?;
-            self.physical = physical;
-            self.blocked = physical;
+            // Remapped held buttons must be released before they can activate
+            // their new action. Reconcile shared keys below rather than briefly
+            // releasing a key still owned by an unchanged stick.
+            self.blocked = self.physical;
         }
+        self.movement
+            .reconfigure(self.profile.sticks, profile.sticks);
         self.profile = profile;
+        if let Some(pad) = self.last_pad {
+            self.report(&pad, now, timing, sink)?;
+        }
         Ok(())
     }
     fn report(
@@ -86,6 +104,7 @@ impl Engine {
         timing: Timing,
         sink: &mut impl Sink,
     ) -> Result<()> {
+        self.last_pad = Some(*p);
         let before: Vec<bool> = self
             .physical
             .iter()
@@ -96,8 +115,10 @@ impl Engine {
         for i in 0..19 {
             self.blocked[i] &= self.physical[i];
         }
-        let mut desired = BTreeSet::new();
+        self.movement.report(p, self.profile.sticks);
+        let mut desired = self.movement.keys(self.profile.sticks);
         let mut mouse = 0;
+        let (mut cursor_x, mut cursor_y) = (0.0, 0.0);
         let mut volume = [false; 2];
         let mut launch = Vec::new();
         for (i, id) in IDS.iter().enumerate() {
@@ -106,6 +127,13 @@ impl Engine {
             }
             match &self.profile.bindings[*id] {
                 Action::None => {}
+                Action::Cursor => match *id {
+                    "dpad_up" => cursor_y -= 1.0,
+                    "dpad_down" => cursor_y += 1.0,
+                    "dpad_left" => cursor_x -= 1.0,
+                    "dpad_right" => cursor_x += 1.0,
+                    _ => unreachable!("validated cursor binding requires a direction"),
+                },
                 Action::Key { key } => {
                     desired.insert(canonical_key(*key));
                 }
@@ -124,6 +152,7 @@ impl Engine {
                 Action::Launch { .. } => {}
             }
         }
+        self.movement.dpad(cursor_x, cursor_y);
         // All releases precede new presses; duplicate bindings share ownership.
         for key in self.held.keys().copied().collect::<Vec<_>>() {
             if !desired.contains(&key) {
@@ -171,12 +200,23 @@ impl Engine {
                 self.volume[i] = Some(now + timing.interval.max(Duration::from_millis(100)));
             }
         }
+        let speed = if self.movement.active(self.profile.sticks) {
+            sink.cursor_speed()
+        } else {
+            0.0
+        };
+        let (x, y) = self.movement.tick(now, self.profile.sticks, speed);
+        if x != 0 || y != 0 {
+            sink.cursor(x, y)?;
+        }
         Ok(())
     }
     fn release(&mut self, sink: &mut impl Sink) -> Result<()> {
         self.physical = [false; 19];
         self.blocked = [false; 19];
         self.volume = [None; 2];
+        self.last_pad = None;
+        self.movement.reset();
         let mut result = Ok(());
         for key in self.held.keys().copied().collect::<Vec<_>>() {
             self.held.insert(key, None);
@@ -217,6 +257,12 @@ impl Sink for Native<'_> {
         } else {
             *self.launch_errors += 1;
         }
+    }
+    fn cursor_speed(&mut self) -> f64 {
+        self.mouse.cursor_speed()
+    }
+    fn cursor(&mut self, x: i32, y: i32) -> Result<()> {
+        self.mouse.cursor_motion(x, y)
     }
 }
 
@@ -266,6 +312,8 @@ impl Controls {
             if profile != self.engine.profile {
                 self.engine.profile(
                     profile,
+                    now,
+                    self.timing,
                     &mut Native {
                         mouse,
                         launch_errors: &mut self.launch_errors,
@@ -306,6 +354,7 @@ mod tests {
         volumes: Vec<bool>,
         launches: Vec<String>,
         reject: Option<u16>,
+        cursor: Vec<(i32, i32)>,
     }
     impl Sink for Fake {
         fn key(&mut self, k: u16, d: bool) -> Result<()> {
@@ -322,6 +371,13 @@ mod tests {
         }
         fn launch(&mut self, path: &str) {
             self.launches.push(path.into())
+        }
+        fn cursor_speed(&mut self) -> f64 {
+            1000.0
+        }
+        fn cursor(&mut self, x: i32, y: i32) -> Result<()> {
+            self.cursor.push((x, y));
+            Ok(())
         }
     }
     fn p(buttons: u16) -> Pad {
@@ -431,7 +487,7 @@ mod tests {
                 path: r"C:\example.exe".into(),
             },
         );
-        e.profile(profile, &mut s).unwrap();
+        e.profile(profile, now, Timing::default(), &mut s).unwrap();
         assert_eq!(s.mouse, 0);
         e.report(&p(btn::A), now, Timing::default(), &mut s)
             .unwrap();
@@ -453,7 +509,7 @@ mod tests {
             .unwrap();
         let mut profile = Profile::default();
         profile.sensitivity = 2.0;
-        e.profile(profile, &mut s).unwrap();
+        e.profile(profile, now, Timing::default(), &mut s).unwrap();
         assert_eq!(s.mouse, 1);
         assert!(!e.blocked[0]);
     }
@@ -519,5 +575,171 @@ mod tests {
         s.reject = None;
         e.release(&mut s).unwrap();
         assert!(e.held.is_empty());
+    }
+    #[test]
+    fn dpad_cursor_moves_by_direction_without_keyboard_events() {
+        let mut e = Engine::default();
+        let mut s = Fake::default();
+        let now = Instant::now();
+        for id in ["dpad_up", "dpad_down", "dpad_left", "dpad_right"] {
+            e.profile.bindings.insert(id.into(), Action::Cursor);
+        }
+        e.report(
+            &Pad {
+                hat: 1,
+                ..Pad::default()
+            },
+            now,
+            Timing::default(),
+            &mut s,
+        )
+        .unwrap();
+        e.tick(now, Timing::default(), &mut s).unwrap();
+        e.tick(now + Duration::from_millis(20), Timing::default(), &mut s)
+            .unwrap();
+        assert!(s.keys.is_empty());
+        assert_eq!(s.cursor, [(14, -14)]);
+        e.report(
+            &Pad::default(),
+            now + Duration::from_millis(21),
+            Timing::default(),
+            &mut s,
+        )
+        .unwrap();
+        e.tick(now + Duration::from_millis(40), Timing::default(), &mut s)
+            .unwrap();
+        assert_eq!(s.cursor.len(), 1);
+    }
+    #[test]
+    fn shared_stick_and_dpad_key_keeps_one_owner_until_both_release() {
+        let mut e = Engine::default();
+        e.profile.sticks.left.mode = crate::profile::StickMode::Arrows;
+        let mut s = Fake::default();
+        let now = Instant::now();
+        for p in [
+            Pad {
+                lx: 65535,
+                ..Pad::default()
+            },
+            Pad {
+                lx: 65535,
+                hat: 2,
+                ..Pad::default()
+            },
+            Pad {
+                hat: 2,
+                ..Pad::default()
+            },
+            Pad::default(),
+        ] {
+            e.report(&p, now, Timing::default(), &mut s).unwrap();
+        }
+        assert_eq!(s.keys, [(0x27, true), (0x27, false)]);
+        assert!(s.cursor.is_empty());
+    }
+    #[test]
+    fn profile_changes_release_stick_keys_without_a_new_hid_report() {
+        let mut e = Engine::default();
+        e.profile.sticks.left.mode = crate::profile::StickMode::Wasd;
+        let mut s = Fake::default();
+        let now = Instant::now();
+        e.report(
+            &Pad {
+                lx: 65535,
+                ..Pad::default()
+            },
+            now,
+            Timing::default(),
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(s.keys, [(0x44, true)]);
+        let mut profile = e.profile.clone();
+        profile.sticks.left.mode = crate::profile::StickMode::Cursor;
+        e.profile(profile, now, Timing::default(), &mut s).unwrap();
+        assert_eq!(s.keys, [(0x44, true), (0x44, false)]);
+        e.tick(now, Timing::default(), &mut s).unwrap();
+        e.tick(now + Duration::from_millis(20), Timing::default(), &mut s)
+            .unwrap();
+        assert!(s.cursor.is_empty());
+        e.report(&Pad::default(), now, Timing::default(), &mut s)
+            .unwrap();
+        e.report(
+            &Pad {
+                lx: 65535,
+                ..Pad::default()
+            },
+            now,
+            Timing::default(),
+            &mut s,
+        )
+        .unwrap();
+        e.tick(now + Duration::from_millis(40), Timing::default(), &mut s)
+            .unwrap();
+        assert_eq!(s.cursor, [(20, 0)]);
+    }
+    #[test]
+    fn changing_a_button_mapping_does_not_repress_the_sticks_shared_key() {
+        let mut e = Engine::default();
+        e.profile.sticks.left.mode = crate::profile::StickMode::Arrows;
+        let mut s = Fake::default();
+        let now = Instant::now();
+        e.report(
+            &Pad {
+                lx: 65535,
+                hat: 2,
+                ..Pad::default()
+            },
+            now,
+            Timing::default(),
+            &mut s,
+        )
+        .unwrap();
+        let mut profile = e.profile.clone();
+        profile.bindings.insert("dpad_right".into(), Action::Cursor);
+        e.profile(profile, now, Timing::default(), &mut s).unwrap();
+        assert_eq!(s.keys, [(0x27, true)]);
+        e.report(&Pad::default(), now, Timing::default(), &mut s)
+            .unwrap();
+        assert_eq!(s.keys, [(0x27, true), (0x27, false)]);
+    }
+    #[test]
+    fn release_after_motion_erases_velocity_fraction_and_filter_state() {
+        let mut e = Engine::default();
+        let mut s = Fake::default();
+        let now = Instant::now();
+        e.profile.sticks.left.smoothing = crate::profile::Smoothing::Steady;
+        e.report(
+            &Pad {
+                lx: 65535,
+                ..Pad::default()
+            },
+            now,
+            Timing::default(),
+            &mut s,
+        )
+        .unwrap();
+        e.tick(now, Timing::default(), &mut s).unwrap();
+        e.tick(now + Duration::from_millis(20), Timing::default(), &mut s)
+            .unwrap();
+        assert!(!s.cursor.is_empty());
+        let count = s.cursor.len();
+        e.release(&mut s).unwrap();
+        for i in 1..50 {
+            e.tick(now + Duration::from_secs(i), Timing::default(), &mut s)
+                .unwrap();
+        }
+        assert_eq!(s.cursor.len(), count);
+        let profile = e.profile.clone();
+        e.profile(
+            profile,
+            now + Duration::from_secs(51),
+            Timing::default(),
+            &mut s,
+        )
+        .unwrap();
+        e.tick(now + Duration::from_secs(52), Timing::default(), &mut s)
+            .unwrap();
+        assert_eq!(s.cursor.len(), count);
     }
 }

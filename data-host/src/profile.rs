@@ -37,6 +37,7 @@ pub enum Action {
     MouseLeft,
     MouseRight,
     MouseMiddle,
+    Cursor,
     VolumeDown,
     VolumeUp,
     MediaPlayPause,
@@ -58,6 +59,7 @@ impl<'de> Deserialize<'de> for Action {
             MouseLeft {},
             MouseRight {},
             MouseMiddle {},
+            Cursor {},
             VolumeDown {},
             VolumeUp {},
             MediaPlayPause {},
@@ -70,6 +72,7 @@ impl<'de> Deserialize<'de> for Action {
             StrictAction::MouseLeft {} => Self::MouseLeft,
             StrictAction::MouseRight {} => Self::MouseRight,
             StrictAction::MouseMiddle {} => Self::MouseMiddle,
+            StrictAction::Cursor {} => Self::Cursor,
             StrictAction::VolumeDown {} => Self::VolumeDown,
             StrictAction::VolumeUp {} => Self::VolumeUp,
             StrictAction::MediaPlayPause {} => Self::MediaPlayPause,
@@ -79,11 +82,83 @@ impl<'de> Deserialize<'de> for Action {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StickMode {
+    Cursor,
+    Arrows,
+    Wasd,
+    None,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Curve {
+    Precise,
+    Linear,
+    Quick,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Smoothing {
+    Off,
+    Light,
+    Steady,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stick {
+    pub mode: StickMode,
+    pub sensitivity: f64,
+    pub curve: Curve,
+    pub deadzone: f64,
+    pub smoothing: Smoothing,
+}
+impl Default for Stick {
+    fn default() -> Self {
+        Self {
+            mode: StickMode::Cursor,
+            sensitivity: 1.0,
+            curve: Curve::Precise,
+            deadzone: 0.20,
+            smoothing: Smoothing::Off,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sticks {
+    pub left: Stick,
+    pub right: Stick,
+}
+impl Sticks {
+    pub fn as_array(&self) -> [Stick; 2] {
+        [self.left, self.right]
+    }
+    fn validate(&self) -> Result<()> {
+        for stick in self.as_array() {
+            ensure!(
+                stick.sensitivity.is_finite() && (0.25..=3.0).contains(&stick.sensitivity),
+                "controls_stick_sensitivity_range"
+            );
+            ensure!(
+                stick.deadzone.is_finite() && (0.0..=0.35).contains(&stick.deadzone),
+                "controls_stick_deadzone_range"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub schema: u32,
     pub sensitivity: f64,
+    // Additive desktop movement settings. Existing button mappings keep their
+    // values; absent movement settings get the same defaults as a fresh profile.
+    #[serde(default)]
+    pub sticks: Sticks,
     #[serde(deserialize_with = "bindings_without_duplicates")]
     pub bindings: BTreeMap<String, Action>,
 }
@@ -135,6 +210,7 @@ impl Default for Profile {
         Self {
             schema: 1,
             sensitivity: 1.0,
+            sticks: Sticks::default(),
             bindings,
         }
     }
@@ -157,8 +233,13 @@ impl Profile {
                 && IDS.iter().all(|id| self.bindings.contains_key(*id)),
             "controls_bindings_incomplete"
         );
-        for action in self.bindings.values() {
+        self.sticks.validate()?;
+        for (id, action) in &self.bindings {
             match action {
+                Action::Cursor => ensure!(
+                    ["dpad_up", "dpad_down", "dpad_left", "dpad_right"].contains(&id.as_str()),
+                    "controls_cursor_requires_direction"
+                ),
                 Action::Key { key } => ensure!((8..=254).contains(key), "controls_key_range"),
                 Action::Launch { path } => validate_launch_path(path)?,
                 _ => {}
@@ -318,6 +399,64 @@ mod tests {
         ] {
             assert!(validate_launch_path(path).is_err(), "{path}");
         }
+    }
+    #[test]
+    fn movement_contract_preserves_existing_buttons_and_rejects_partial_settings() {
+        let mut value = serde_json::to_value(Profile::default()).unwrap();
+        value["bindings"]["left_stick"] = serde_json::json!({"kind":"key","key":65});
+        value.as_object_mut().unwrap().remove("sticks");
+        let profile = Profile::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(profile.sticks, Sticks::default());
+        assert_eq!(profile.bindings["left_stick"], Action::Key { key: 65 });
+        for malformed in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"left":serde_json::to_value(Stick::default()).unwrap()}),
+        ] {
+            value["sticks"] = malformed;
+            assert!(Profile::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+        value["sticks"] = serde_json::to_value(Sticks::default()).unwrap();
+        for (field, invalid) in [
+            ("mode", serde_json::json!("launch")),
+            ("sensitivity", serde_json::json!(4)),
+            ("deadzone", serde_json::json!(-0.1)),
+            ("curve", serde_json::json!("invented")),
+            ("smoothing", serde_json::json!(true)),
+        ] {
+            let mut broken = value.clone();
+            broken["sticks"]["left"][field] = invalid;
+            assert!(
+                Profile::parse(&serde_json::to_vec(&broken).unwrap()).is_err(),
+                "{field}"
+            );
+            let mut missing = value.clone();
+            missing["sticks"]["left"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                Profile::parse(&serde_json::to_vec(&missing).unwrap()).is_err(),
+                "missing {field}"
+            );
+        }
+        for number in [f64::NAN, f64::INFINITY] {
+            let mut profile = Profile::default();
+            profile.sticks.left.deadzone = number;
+            assert!(profile.validate().is_err());
+            profile.sticks.left.deadzone = 0.2;
+            profile.sticks.right.sensitivity = number;
+            assert!(profile.validate().is_err());
+        }
+    }
+    #[test]
+    fn cursor_actions_require_a_direction() {
+        for id in IDS {
+            let mut profile = Profile::default();
+            profile.bindings.insert(id.into(), Action::Cursor);
+            assert_eq!(profile.validate().is_ok(), id.starts_with("dpad_"));
+        }
+        assert!(serde_json::from_str::<Action>(r#"{"kind":"cursor","key":38}"#).is_err());
     }
     #[test]
     fn reload_keeps_last_good_profile_until_valid_or_deleted() {

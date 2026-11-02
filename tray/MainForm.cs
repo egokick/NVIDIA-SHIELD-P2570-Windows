@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace ShieldController;
 
-internal enum PreviewScene { NotPaired, Pairing, Provisioning, PairedDisconnected, Connected, ConnectedMappingsCustom, Error, MissingDriver, Recovery, MultipleControllers, Settings, Help, NoController, Connecting, RestartRequired, InstallFailed, NetworkChoice, LocationPermission, WifiOff }
+internal enum PreviewScene { NotPaired, Pairing, Provisioning, PairedDisconnected, Connected, ConnectedMappingsCustom, ConnectedStickAdvanced, Error, MissingDriver, Recovery, MultipleControllers, Settings, Help, NoController, Connecting, RestartRequired, InstallFailed, NetworkChoice, LocationPermission, WifiOff }
 
 internal sealed class MainForm : Form
 {
@@ -55,6 +55,7 @@ internal sealed class MainForm : Form
         if (controlsNeedReset) controlMappings.SetSaveStatus("Saved controls could not load. Use Reset to repair them.", error: true);
         if (preview) controlMappings.SetCalibration("32″ · 2560 × 1440", "Calibrated for this display · 100% is the recommended starting point.");
         BuildHome(); BuildSettings(); BuildHelp(); ShowPage(home);
+        controlMappings.ContentHeightChanged += (_, _) => LayoutHome();
         if (!preview)
         {
             var menu = new ContextMenuStrip();
@@ -148,13 +149,13 @@ internal sealed class MainForm : Form
         if (connectedLayout && wide)
         {
             int heroWidth = Math.Clamp((int)(width * .34), S(286), S(360));
-            height = Math.Max(home.ClientSize.Height, ControlMappingsPanel.HeightForWidth(width - heroWidth, DeviceDpi));
+            height = Math.Max(home.ClientSize.Height, controlMappings.RequiredHeight(width - heroWidth, DeviceDpi));
             page.SetBounds(0, 0, heroWidth, height);
             controlMappings.SetBounds(heroWidth, 0, width - heroWidth, height);
         }
         else if (connectedLayout)
         {
-            int heroHeight = S(460), controlsHeight = ControlMappingsPanel.HeightForWidth(width, DeviceDpi); height = heroHeight + controlsHeight;
+            int heroHeight = S(460), controlsHeight = controlMappings.RequiredHeight(width, DeviceDpi); height = heroHeight + controlsHeight;
             page.SetBounds(0, 0, width, heroHeight);
             controlMappings.SetBounds(0, heroHeight, width, controlsHeight);
         }
@@ -505,18 +506,18 @@ internal sealed class MainForm : Form
     internal void RenderPreview(PreviewScene scene, string path, Size? viewport = null)
     {
         if (viewport is Size size) Size = size;
-        else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom) ClientSize = new Size(1040, 820);
-        bool paired = scene is PreviewScene.PairedDisconnected or PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.Connecting or PreviewScene.Recovery or PreviewScene.Settings;
+        else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced) ClientSize = new Size(1040, 820);
+        bool paired = scene is PreviewScene.PairedDisconnected or PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced or PreviewScene.Connecting or PreviewScene.Recovery or PreviewScene.Settings;
         ApplyCapabilities(new(paired, scene == PreviewScene.Recovery,
             [new("windows", "Windows 11 24H2 or newer", true), new("npcap", "Npcap connection tool", scene is not (PreviewScene.MissingDriver or PreviewScene.RestartRequired or PreviewScene.InstallFailed)),
              new("vigem", "ViGEmBus gamepad driver", true), new("package", "Application files", true), new("location", "Windows Wi-Fi permission", scene != PreviewScene.LocationPermission), new("wifi", "Wi-Fi available", scene != PreviewScene.WifiOff),
              new("pairing-radio", "One enabled Wi-Fi adapter", true), new("uplink", "Active internet connection", true)],
             [new("preview", "Wi-Fi")], [new("preview", "Ethernet")], "preview", "preview"));
         if (scene is PreviewScene.Pairing or PreviewScene.Provisioning) { model.BeginPairing(); busy = true; progress = scene == PreviewScene.Pairing ? "Searching" : "Pairing"; }
-        else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.PairedDisconnected or PreviewScene.Connecting)
+        else if (scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced or PreviewScene.PairedDisconnected or PreviewScene.Connecting)
         {
             previewRunning = true;
-            using var e = JsonDocument.Parse(scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom ? "{\"connected\":true,\"transport_ready\":true}" : scene == PreviewScene.Connecting ? "{}" : "{\"transport_ready\":true}"); model.ApplySession(e.RootElement);
+            using var e = JsonDocument.Parse(scene is PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.ConnectedStickAdvanced ? "{\"connected\":true,\"transport_ready\":true}" : scene == PreviewScene.Connecting ? "{}" : "{\"transport_ready\":true}"); model.ApplySession(e.RootElement);
         }
         else if (scene == PreviewScene.Error) model.Fail("That didn't work. Try again, or open Help.");
         else if (scene == PreviewScene.InstallFailed) model.Fail("The installer didn't finish. Please try again.");
@@ -533,6 +534,7 @@ internal sealed class MainForm : Form
             custom.Bindings["left_stick"] = new ControlBinding { Kind = "key", Key = 0xA0 };
             controlMappings.SetProfile(custom); controlMappings.SetSaveStatus("✓  Saved · applies while you use the controller");
         }
+        if (scene == PreviewScene.ConnectedStickAdvanced) controlMappings.ExpandStickOptions();
         if (scene == PreviewScene.Settings) ShowPage(settings); else if (scene == PreviewScene.Help) ShowPage(help);
         static void PrepareControl(Control c) { _ = c.Handle; c.PerformLayout(); foreach (Control child in c.Controls) PrepareControl(child); }
         PrepareControl(this); LayoutHome(); PerformLayout(); PrepareControl(this); PerformLayout();

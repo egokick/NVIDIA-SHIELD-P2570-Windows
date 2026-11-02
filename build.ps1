@@ -2,7 +2,7 @@
 param(
     [string]$NpcapSdkDirectory = $env:NPCAP_SDK_DIR,
     [string]$OutputDirectory = '',
-    [ValidatePattern('\A[0-9]+\.[0-9]+\.[0-9]+\z')][string]$Version = '0.4.0'
+    [ValidatePattern('\A[0-9]+\.[0-9]+\.[0-9]+\z')][string]$Version = '0.5.0'
 )
 $ErrorActionPreference='Stop'
 $repository=[IO.Path]::GetFullPath($PSScriptRoot)

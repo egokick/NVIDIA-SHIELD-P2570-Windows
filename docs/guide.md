@@ -33,6 +33,7 @@ This release supports one controller and the standard gamepad sticks, buttons, D
 | Controller | Windows action |
 |---|---|
 | Touchpad | Move the mouse; press to left-click |
+| Left / right stick movement | Move the cursor; each stick has its own movement mode and speed |
 | A / B | Left-click / right-click; hold A to drag |
 | D-pad | Keyboard arrow keys; hold to repeat |
 | − / + | Volume down / up; hold to keep adjusting |
@@ -41,6 +42,8 @@ This release supports one controller and the standard gamepad sticks, buttons, D
 | X, Y, shoulders, triggers, stick clicks | No desktop action until you choose one |
 
 When **Connected**, the app shows your desktop controls beside the controller picture. Use the **trackpad sensitivity slider** to make the pointer slower or faster. Its 100% default is calibrated to the monitor's resolution and reported physical size; Windows display scaling provides a size estimate when the monitor does not report one. Windows pointer speed and acceleration still apply.
+
+Each stick has a separate **Movement** menu and **Speed** slider. Both default to **Cursor**; choose **Arrow keys**, **WASD**, or **Gamepad only** if preferred. Under **Feel & drift**, choose a response curve, adjust the dead zone, or add optional smoothing. The D-pad's **Cursor** preset changes all four directions at once, and individual direction menus remain available. Stick clicks are separate button mappings. [Recommended starting settings and what they mean](joystick-controls.md).
 
 Each button has its own dropdown. Choose a keyboard key, mouse click, volume/media action, or **Run script or program…** and pick an EXE, CMD, BAT or PowerShell file. The selected file runs once when you press that controller button; selecting it in the app does not run it. **Reset to defaults** restores every desktop mapping and the calibrated 100% sensitivity together.
 

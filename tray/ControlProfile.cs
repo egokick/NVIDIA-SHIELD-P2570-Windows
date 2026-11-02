@@ -12,17 +12,38 @@ internal sealed record ControlBinding
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record StickSettings
+{
+    [JsonPropertyName("mode"), JsonRequired] public string Mode { get; set; } = "cursor";
+    [JsonPropertyName("sensitivity"), JsonRequired] public double Sensitivity { get; set; } = 1;
+    [JsonPropertyName("curve"), JsonRequired] public string Curve { get; set; } = "precise";
+    [JsonPropertyName("deadzone"), JsonRequired] public double Deadzone { get; set; } = 0.20;
+    [JsonPropertyName("smoothing"), JsonRequired] public string Smoothing { get; set; } = "off";
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed class StickSettingsPair
+{
+    [JsonPropertyName("left"), JsonRequired] public StickSettings Left { get; set; } = new();
+    [JsonPropertyName("right"), JsonRequired] public StickSettings Right { get; set; } = new();
+    internal StickSettingsPair Copy() => new() { Left = Left with { }, Right = Right with { } };
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed class ControlProfile
 {
     [JsonPropertyName("schema"), JsonRequired] public int Schema { get; set; } = 1;
     [JsonPropertyName("sensitivity"), JsonRequired] public double Sensitivity { get; set; } = 1;
     [JsonPropertyName("bindings"), JsonRequired] public Dictionary<string, ControlBinding> Bindings { get; set; } = new(StringComparer.Ordinal);
-    public ControlProfile Copy() => new() { Schema = Schema, Sensitivity = Sensitivity, Bindings = Bindings.ToDictionary(p => p.Key, p => p.Value with { }, StringComparer.Ordinal) };
+    // Additive settings default when absent so an update keeps existing button mappings.
+    [JsonPropertyName("sticks")] public StickSettingsPair Sticks { get; set; } = new();
+    public ControlProfile Copy() => new() { Schema = Schema, Sensitivity = Sensitivity, Bindings = Bindings.ToDictionary(p => p.Key, p => p.Value with { }, StringComparer.Ordinal), Sticks = Sticks.Copy() };
 }
 
 internal static class ProfileStore
 {
     internal static readonly string[] ControlIds = ["a", "b", "x", "y", "l1", "l2", "r1", "r2", "home", "play_pause", "back", "left_stick", "right_stick", "dpad_up", "dpad_down", "dpad_left", "dpad_right", "volume_down", "volume_up"];
+    internal static readonly string[] DpadIds = ["dpad_up", "dpad_right", "dpad_down", "dpad_left"];
     private static readonly HashSet<string> SimpleKinds = ["none", "mouse_left", "mouse_right", "mouse_middle", "volume_down", "volume_up", "media_play_pause", "media_stop"];
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, MaxDepth = 8 };
     internal static string FilePath => Path.Combine(OwnerClient.Root, "controls.json");
@@ -47,10 +68,17 @@ internal static class ProfileStore
             throw new InvalidDataException("The controls profile has invalid sensitivity or format.");
         if (profile.Bindings is null || profile.Bindings.Count != ControlIds.Length || ControlIds.Any(id => !profile.Bindings.ContainsKey(id)))
             throw new InvalidDataException("The controls profile must contain every controller button.");
-        foreach (ControlBinding binding in profile.Bindings.Values)
+        if (profile.Sticks is null || profile.Sticks.Left is null || profile.Sticks.Right is null)
+            throw new InvalidDataException("Both joystick movement settings are required.");
+        foreach (var stick in new[] { profile.Sticks.Left, profile.Sticks.Right })
+            if (stick.Mode is not ("cursor" or "arrows" or "wasd" or "none") || stick.Curve is not ("precise" or "linear" or "quick") ||
+                stick.Smoothing is not ("off" or "light" or "steady") || !double.IsFinite(stick.Sensitivity) || stick.Sensitivity is < 0.25 or > 3 ||
+                !double.IsFinite(stick.Deadzone) || stick.Deadzone is < 0 or > 0.35)
+                throw new InvalidDataException("The joystick movement settings are invalid.");
+        foreach (var (id, binding) in profile.Bindings)
         {
             if (binding is null) throw new InvalidDataException("A controller binding is missing.");
-            if (SimpleKinds.Contains(binding.Kind))
+            if (SimpleKinds.Contains(binding.Kind) || binding.Kind == "cursor" && DpadIds.Contains(id))
             {
                 if (binding.Key is not null || binding.Path is not null) throw new InvalidDataException("This action cannot have a key or program.");
             }

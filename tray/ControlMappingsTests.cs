@@ -35,6 +35,52 @@ internal static class ControlMappingsTests
             panel.SensitivityControl.Value = -20; Check(panel.SensitivityControl.Value == 25, "minimum sensitivity");
             panel.SensitivityControl.Value = 1000; Check(panel.SensitivityControl.Value == 300, "maximum sensitivity");
         }
+        using (var panel = new ControlMappingsPanel(initial, profile => { saves++; lastSaved = profile; }))
+        {
+            int before = saves;
+            Check(panel.LeftStick.MovementPicker.SelectedItem?.Kind == "cursor" && panel.RightStick.MovementPicker.SelectedItem?.Kind == "cursor", "both joystick movement menus default to cursor");
+            panel.LeftStick.SpeedSlider.Value = 160; panel.RightStick.SpeedSlider.Value = 75;
+            Check(saves == before, "independent stick sliders debounce"); panel.SavePendingChanges();
+            Check(lastSaved!.Sticks.Left.Sensitivity == 1.6 && lastSaved.Sticks.Right.Sensitivity == .75 && lastSaved.Sensitivity == 1, "stick sensitivity is independent of each other and the trackpad");
+            panel.LeftStick.MovementPicker.SelectedIndex = 2;
+            Check(lastSaved!.Sticks.Left.Mode == "wasd" && lastSaved.Sticks.Right.Mode == "cursor" && !panel.LeftStick.SpeedSlider.Enabled, "stick movement menu saves the selected mode and disables unused cursor speed");
+            panel.LeftStick.ToggleAdvanced(); panel.LeftStick.DeadzoneSlider.Value = 10; panel.SavePendingChanges();
+            Check(lastSaved!.Sticks.Left.Deadzone == .10 && panel.LeftStick.DeadzoneSlider.Enabled && !panel.LeftStick.CurvePicker.Enabled && !panel.LeftStick.SmoothingPicker.Enabled, "keyboard movement exposes its dead zone while disabling cursor-only response settings");
+            panel.LeftStick.ToggleAdvanced();
+            panel.LeftStick.MovementPicker.SelectedIndex = 0;
+            int compact = panel.RequiredHeight(600, 96), layoutChanges = 0;
+            panel.ContentHeightChanged += (_, _) => layoutChanges++;
+            panel.ExpandStickOptions();
+            Check(layoutChanges == 2 && panel.RequiredHeight(600, 96) > compact && panel.LeftStick.Expanded && panel.RightStick.Expanded, "feel expansion resizes the production scroller");
+            panel.LeftStick.CurvePicker.SelectedIndex = 1; panel.LeftStick.SmoothingPicker.SelectedIndex = 1;
+            panel.LeftStick.DeadzoneSlider.Value = 12; panel.SavePendingChanges();
+            Check(lastSaved!.Sticks.Left.Curve == "linear" && lastSaved.Sticks.Left.Smoothing == "light" && lastSaved.Sticks.Left.Deadzone == .12 && lastSaved.Sticks.Right.Curve == "precise", "feel controls save only their own joystick");
+            panel.DpadModePicker.SelectedIndex = 1;
+            Check(ProfileStore.DpadIds.All(id => lastSaved!.Bindings[id].Kind == "cursor") && lastSaved!.Bindings["a"].Kind == "mouse_left", "D-pad cursor preset changes all four directions in one action");
+            panel.MappingRows.Single(row => row.Id == "dpad_up").CommitChoice(new("Space", "key", 32));
+            Check(panel.DpadModePicker.SelectedItem?.Kind == "custom" && lastSaved!.Bindings["dpad_up"].Key == 32, "individual D-pad mapping preserves the other directions and marks custom");
+            panel.DpadModePicker.SelectedIndex = 0;
+            Check(ProfileStore.DpadIds.All(id => lastSaved!.Bindings[id] == initial.Bindings[id]), "D-pad arrow preset restores arrow keys");
+            panel.ResetDefaults();
+            Check(lastSaved!.Sticks.Left == new StickSettings() && lastSaved.Sticks.Right == new StickSettings() && panel.LeftStick.SpeedSlider.Value == 100 && panel.RightStick.SpeedSlider.Value == 100, "reset restores all motion settings and visible sliders");
+            lastSaved.Sticks.Left.Mode = "none";
+            Check(panel.LeftStick.CurrentSettings.Mode == "cursor", "save callback cannot mutate displayed stick settings");
+            Check(!MappingChoices.ForControl("a").Any(choice => choice.Kind == "cursor") && MappingChoices.ForControl("dpad_left").Any(choice => choice.Kind == "cursor"), "cursor choices are available only for D-pad directions");
+            panel.LeftStick.DeadzoneSlider.Value = 100;
+            Check(panel.LeftStick.DeadzoneSlider.Value == 35, "dead-zone slider uses its own range");
+            typeof(SensitivitySlider).GetMethod("OnKeyDown", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(panel.LeftStick.DeadzoneSlider, [new KeyEventArgs(Keys.Left)]);
+            Check(panel.LeftStick.DeadzoneSlider.Value == 34, "dead-zone keyboard adjustment uses one percent steps");
+            using (var movementMenu = panel.RightStick.MovementPicker.PrepareMenu()) {
+                movementMenu.Items.OfType<ToolStripMenuItem>().Single(item => item.Text == "Gamepad only").PerformClick();
+                Check(lastSaved!.Sticks.Right.Mode == "none" && panel.RightStick.CurrentSettings.Mode == "none", "native stick menu changes the production setting");
+                Check(!movementMenu.Items.OfType<ToolStripMenuItem>().Any(item => item.Text == "Keyboard keys"), "movement menus must not display an empty keyboard submenu");
+            }
+            foreach (int width in new[] { 600, 480 }) {
+                panel.Size = new Size(width, panel.RequiredHeight(width, 96)); _ = panel.Handle; panel.PerformLayout();
+                Check(panel.Controls.Cast<Control>().All(control => control.Bottom <= panel.ClientSize.Height && control.Right <= panel.ClientSize.Width), "all controls fit the calculated expanded height at each width");
+                Check(panel.LeftStick.Bounds.IntersectsWith(panel.RightStick.Bounds) == false, "stick cards must not overlap");
+            }
+        }
         int rowSaves = 0;
         using (var row = new MappingRow("y", "Y", (_, _) => rowSaves++, filePicker: _ => null, keyPicker: _ => null))
         {
@@ -93,10 +139,29 @@ internal static class ControlMappingsTests
         Check(currentMenu!.IsDisposed, "disposing the picker must release its final owned menu");
 
         string binary = Path.GetFullPath(AppContext.BaseDirectory), separator = Path.DirectorySeparatorChar + "debug" + Path.DirectorySeparatorChar;
-        int debug = binary.IndexOf(separator, StringComparison.OrdinalIgnoreCase);
+        int debug = binary.LastIndexOf(separator, StringComparison.OrdinalIgnoreCase);
         if (debug < 0) throw new IOException("Controls UI self-tests must run from a build under debug.");
         string directory = Path.Combine(binary[..(debug + separator.Length)], "controls-ui-selftest", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
+        using (var panel = new ControlMappingsPanel(initial, _ => { }))
+        using (var host = new Form { ShowInTaskbar = false })
+        {
+            host.Controls.Add(panel); _ = host.Handle;
+            panel.ExpandStickOptions(); panel.SetDpadMode("cursor");
+            panel.Size = new Size(420, panel.RequiredHeight(420, 96)); panel.PerformLayout();
+            panel.RightStick.MovementPicker.RenderMenuPreview(Path.Combine(directory, "joystick-movement-menu.png"));
+            panel.DpadModePicker.RenderMenuPreview(Path.Combine(directory, "dpad-movement-menu.png"));
+            panel.MappingRows.Single(row => row.Id == "dpad_up").RenderChoicesPreview(Path.Combine(directory, "dpad-direction-menu.png"));
+            static void Layout(Control control) { _ = control.Handle; control.PerformLayout(); foreach (Control child in control.Controls) Layout(child); }
+            Layout(panel);
+            using var image = new Bitmap(panel.Width, panel.Height); panel.DrawToBitmap(image, new Rectangle(Point.Empty, panel.Size));
+            image.Save(Path.Combine(directory, "narrow-expanded-controls.png"));
+            panel.LeftStick.MovementPicker.SelectedIndex = 2; Layout(panel);
+            using var keyboardImage = new Bitmap(panel.LeftStick.Width, panel.LeftStick.Height);
+            panel.LeftStick.DrawToBitmap(keyboardImage, new Rectangle(Point.Empty, panel.LeftStick.Size));
+            keyboardImage.Save(Path.Combine(directory, "keyboard-stick-card.png"));
+            Check(!host.Visible && !host.ShowInTaskbar, "component captures must remain hidden");
+        }
         string dependencyReceipt = Path.Combine(directory, "dependency-result-" + Guid.NewGuid().ToString("N") + ".json");
         var receiptWriter = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe")) {
             UseShellExecute = false, CreateNoWindow = true, WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
