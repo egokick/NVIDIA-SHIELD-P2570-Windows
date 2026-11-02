@@ -30,6 +30,7 @@ jobs:
           $p = Start-Process -FilePath ./debug/package/bin/tray/ShieldController.exe -ArgumentList '--selftest' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Tray checks failed' }
       - name: Build installer
+        shell: powershell
         run: ./installer/build-installer.ps1
       - name: Preserve release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
