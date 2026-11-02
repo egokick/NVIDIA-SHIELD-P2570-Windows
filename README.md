@@ -10,7 +10,7 @@ This is an independent community project, not an NVIDIA product. The P2570 uses 
 
 ## Get started
 
-1. Run **NVIDIA-SHIELD-P2570-Windows-Setup-0.1.0.exe** and click **Install**.
+1. Run **NVIDIA-SHIELD-P2570-Windows-Setup-0.1.1.exe** and click **Install**.
 2. Unplug the controller's USB cable from the PC. Touch and hold the green NVIDIA logo for **three seconds**, until it flashes. The picture in the app shows where to touch; the logo does not click. A wall USB charger is fine.
 3. Click **It's flashing**. The app finds, pairs, and connects your controller automatically. If it finds more than one controller, choose yours.
 4. When asked, tap the NVIDIA logo once and move a stick. **Connected** means your controller is sending wireless input. Open your game and choose its Xbox/controller input.
@@ -32,7 +32,18 @@ The app installer needs no .NET or developer tools. Driver installation may requ
 
 The working wireless path has been tested with **P2570 firmware Ozmo 81, Realtek RTL8852CE motherboard Wi-Fi, and Windows 11 build 26300**. Actual stick movement and button presses reached Windows XInput. This does **not** establish compatibility with every adapter, Windows build, or controller firmware. Unsupported capabilities produce an error instead of changing driver settings.
 
-This first release supports one controller and the standard gamepad sticks, buttons, D-pad and triggers. The touchpad moves the PC mouse; pressing it clicks. Audio, microphone and vibration are not implemented. ViGEmBus is an archived upstream project; its final signed release is used here.
+This release supports one controller and the standard gamepad sticks, buttons, D-pad and triggers. It also controls the Windows desktop:
+
+| Controller | Windows action |
+|---|---|
+| Touchpad | Move the mouse; press to left-click |
+| A / B | Left-click / right-click; hold A to drag |
+| D-pad | Keyboard arrow keys; hold to repeat |
+| − / + | Volume down / up; hold to keep adjusting |
+
+Touchpad speed adjusts to the monitor under the pointer at the start of each swipe, using its physical resolution with DPI-aware measurement. Windows pointer speed and acceleration still apply. Arrow repeat follows your Windows keyboard settings. These desktop actions work alongside the Xbox gamepad buttons, so a game that accepts both can respond to both. Disconnecting releases all held buttons and keys.
+
+Controller headset audio, microphone and vibration are not implemented. ViGEmBus is an archived upstream project; its final signed release is used here.
 
 ## What the tray status means
 

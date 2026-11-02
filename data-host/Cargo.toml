@@ -15,4 +15,4 @@ serde_json = "1.0"
 sha2 = "0.10"
 tracing = { version = "0.1", features = ["max_level_off", "release_max_level_off"] }
 vigem-client = "0.1.4"
-windows = { version = "0.62.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_NetworkManagement_WiFi", "Win32_Networking_WinSock", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+windows = { version = "0.62.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_NetworkManagement_WiFi", "Win32_Networking_WinSock", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_Threading"] }

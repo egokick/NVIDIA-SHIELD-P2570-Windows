@@ -16,7 +16,7 @@ Package staging must be a new directory. For another build, choose a fresh path 
 ## Source layout
 
 - `owner/`: Windows hotspot lifecycle, setup, WPS pairing and recovery.
-- `data-host/`: exact-controller Ozmo transport and virtual Xbox gamepad output.
+- `data-host/`: exact-controller Ozmo transport, virtual Xbox gamepad, mouse and keyboard output.
 - `vendor/ozproto/`: protocol code with upstream licence/provenance.
 - `tray/`: Windows tray app, guided pairing, requirements and live status.
 - `installer/`: installer, uninstaller and verified official-driver download helper.

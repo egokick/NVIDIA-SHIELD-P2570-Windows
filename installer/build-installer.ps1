@@ -47,7 +47,8 @@ try {
 $out = Join-Path $debugRoot 'installer-publish'
 dotnet publish (Join-Path $PSScriptRoot 'ShieldController.Setup.csproj') -c Release -r win-x64 --self-contained true -o $out "-p:PayloadPath=$archive" "-p:BaseIntermediateOutputPath=$debugRoot\installer-obj\" "-p:BaseOutputPath=$debugRoot\installer-bin\"
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
-$setup = Join-Path $release 'NVIDIA-SHIELD-P2570-Windows-Setup-0.1.0.exe'
+if ($manifest.version -notmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z') { throw 'Invalid package version.' }
+$setup = Join-Path $release ('NVIDIA-SHIELD-P2570-Windows-Setup-' + $manifest.version + '.exe')
 Copy-Item -LiteralPath (Join-Path $out 'ShieldControllerSetup.exe') -Destination $setup -Force
 $fixture = Join-Path $debugRoot ('installer-selftest\' + [guid]::NewGuid().ToString('N'))
 $checkOutput = Join-Path $debugRoot ('installer-selftest-' + [IO.Path]::GetFileName($fixture) + '.jsonl')

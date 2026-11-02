@@ -18,6 +18,7 @@ mod adapters;
 mod controller;
 mod diagnostic;
 use diagnostic::{Code, checkpoint};
+mod keyboard;
 mod lease;
 mod mapping;
 mod mouse;
@@ -132,7 +133,7 @@ fn main() {
     if !args.run {
         println!(
             "{}",
-            json!({"stage":"plan","hardware_opened":false,"required_channel":36,"gamepad_only":false,"touchpad_mouse":true,"starts_or_stops_ap":false,"requires_installed_private_config":true,"lifetime":"owner process and heartbeat","owner_heartbeat":"alive\\n every <=1s; loss >=3s stops child"})
+            json!({"stage":"plan","hardware_opened":false,"required_channel":36,"gamepad_only":false,"touchpad_mouse":true,"desktop_buttons":true,"starts_or_stops_ap":false,"requires_installed_private_config":true,"lifetime":"owner process and heartbeat","owner_heartbeat":"alive\\n every <=1s; loss >=3s stops child"})
         );
         return;
     }
@@ -379,6 +380,7 @@ fn data_loop(
                 }
                 last_slow = now;
             }
+            output.tick(Instant::now())?;
             let frames = host.take_tx();
             if !frames.is_empty() {
                 ensure!(

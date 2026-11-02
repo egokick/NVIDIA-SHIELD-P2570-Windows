@@ -2,9 +2,10 @@ use crate::controller::Pad;
 use anyhow::{Result, ensure};
 use vigem_client::{Client, TargetId, XGamepad, Xbox360Wired};
 
-/// ViGEm gamepad and explicitly enabled controller touchpad mouse output.
+/// ViGEm gamepad plus controller mouse, arrow keys and Windows volume output.
 pub struct Output {
     mouse: crate::mouse::Mouse,
+    keys: crate::keyboard::Keys,
     pad: Option<Xbox360Wired<Client>>,
     pending: Option<(XGamepad, bool)>,
     pub slot: Option<u32>,
@@ -14,6 +15,7 @@ impl Output {
     pub fn new() -> Self {
         Self {
             mouse: crate::mouse::Mouse::default(),
+            keys: crate::keyboard::Keys::default(),
             pad: None,
             pending: None,
             slot: None,
@@ -37,6 +39,8 @@ impl Output {
         Ok(())
     }
     pub fn pad(&mut self, p: &Pad) -> Result<bool> {
+        self.mouse.pad(p)?;
+        self.keys.report(p, std::time::Instant::now())?;
         self.pending = Some((crate::mapping::to_xgamepad(p), true));
         self.flush()
     }
@@ -52,15 +56,19 @@ impl Output {
         }
         Ok(false)
     }
+    pub fn tick(&mut self, now: std::time::Instant) -> Result<()> {
+        self.keys.tick(now)
+    }
     pub fn mouse(&mut self, t: &crate::controller::Trackpad) -> Result<()> {
         self.mouse.report(*t)
     }
     pub fn release(&mut self) -> Result<()> {
         let mouse = self.mouse.release();
+        let keyboard = self.keys.release();
         self.ready_reported = false;
         self.pending = Some((XGamepad::default(), false));
         let gamepad = self.flush().map(|_| ());
-        mouse.and(gamepad)
+        mouse.and(keyboard).and(gamepad)
     }
     pub fn close(&mut self) -> Result<()> {
         let release = self.release();
