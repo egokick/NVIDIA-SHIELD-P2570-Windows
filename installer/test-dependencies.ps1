@@ -29,6 +29,55 @@ foreach ($rule in $rules) {
     if ($rule.FileSystemRights -ne $expected) { throw 'Unexpected public driver permissions.' }
 }
 if ((Get-Acl -LiteralPath $fixture).Sddl -ne $parentBefore) { throw 'Parent directory permissions changed.' }
+# Exercise the production ownership guard against foreign owners without
+# assigning another account ownership of any real file. A rejected owner must
+# fail before Set-Acl is reached, even for an elevated administrator.
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+try { $isAdministrator = ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) }
+finally { $identity.Dispose() }
+$foreignOwners = @('S-1-5-21-99-98-97-1001','S-1-5-18')
+if (-not $isAdministrator) { $foreignOwners += 'S-1-5-32-544' }
+$ownershipChecks = 0
+foreach ($owner in $foreignOwners) {
+    $script:ownerProbeAcl = New-Object Security.AccessControl.FileSecurity
+    $script:ownerProbeAcl.SetOwner([Security.Principal.SecurityIdentifier]::new($owner))
+    $script:ownerProbeWrites = 0
+    $beforeFileAcl = (Get-Acl -LiteralPath $file).Sddl
+    function Get-Acl { param([string]$LiteralPath) return $script:ownerProbeAcl }
+    function Set-Acl { param([string]$LiteralPath,$AclObject) $script:ownerProbeWrites++; throw 'Rejected owner reached ACL mutation.' }
+    try {
+        $rejected = $false
+        try { Allow-ElevatedDriverRead $file }
+        catch { if ($_.Exception.Message -eq 'The driver download belongs to a different Windows account.') { $rejected = $true } else { throw } }
+        if (-not $rejected -or $script:ownerProbeWrites -ne 0) { throw 'Foreign driver owner was accepted or mutated.' }
+        $ownershipChecks++
+    } finally {
+        Remove-Item -LiteralPath 'Function:\Get-Acl','Function:\Set-Acl'
+        Remove-Variable -Name ownerProbeAcl,ownerProbeWrites -Scope Script
+    }
+    if ((Get-Acl -LiteralPath $file).Sddl -ne $beforeFileAcl) { throw 'Rejected ownership probe changed the real file.' }
+}
+$adminOwnedFixtureExercised = $false
+if ($isAdministrator) {
+    # Windows hosted runners create files owned by BUILTIN\Administrators.
+    # Reproduce that ownership explicitly instead of relying on host defaults.
+    $adminFile = Join-Path $fixture 'administrators-owned-driver-fixture.txt'
+    [IO.File]::WriteAllText($adminFile,'Public elevated-installer ownership fixture. This is not executable.')
+    $adminAcl = Get-Acl -LiteralPath $adminFile
+    $adminAcl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    Set-Acl -LiteralPath $adminFile -AclObject $adminAcl
+    if ((Get-Acl -LiteralPath $adminFile).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw 'Elevated ownership fixture was not established.' }
+    Allow-ElevatedDriverRead $adminFile
+    $normalized = Get-Acl -LiteralPath $adminFile
+    $normalizedRules = @($normalized.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+    if ($normalized.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid -or -not $normalized.AreAccessRulesProtected -or $normalizedRules.Count -ne 3) { throw 'Elevated driver ownership was not normalized to the installing user.' }
+    foreach ($rule in $normalizedRules) {
+        $expected = if ($rule.IdentityReference.Value -eq $sid) { [Security.AccessControl.FileSystemRights]::FullControl } elseif ($rule.IdentityReference.Value -in @('S-1-5-32-544','S-1-5-18')) { [Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize } else { throw 'Unexpected elevated fixture principal.' }
+        if ($rule.AccessControlType -ne 'Allow' -or $rule.FileSystemRights -ne $expected) { throw 'Elevated fixture broadened public-reader write access.' }
+    }
+    $adminOwnedFixtureExercised = $true; $ownershipChecks++
+}
+if ((Get-Acl -LiteralPath $fixture).Sddl -ne $parentBefore) { throw 'Ownership regression changed the parent directory permissions.' }
 $handle = [IO.File]::Open($file,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
 try {
     $blocked = $false; try { [IO.File]::WriteAllText($file,'Replacement') } catch [IO.IOException] { $blocked = $true }
@@ -47,4 +96,4 @@ try {
     $receipt = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('NVIDIA-SHIELD-P2570-Windows\'+$receiptName)
     if (Test-Path -LiteralPath $receipt) { throw 'Rejected helper wrote a result file.' }
 } finally { if ($held) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
-@{passed=$true;acl_checks=6;concurrency_checks=2;driver_changes=0;elevation_prompts=0;pairing_files_read=0} | ConvertTo-Json -Compress
+@{passed=$true;acl_checks=6;ownership_checks=$ownershipChecks;admin_owned_fixture_exercised=$adminOwnedFixtureExercised;concurrency_checks=2;driver_changes=0;elevation_prompts=0;pairing_files_read=0} | ConvertTo-Json -Compress
