@@ -26,7 +26,7 @@ assert 'ATTR{idVendor}=="0bda"' in rules and 'ATTR{idProduct}=="0811"' in rules
 assert "uaccess" in rules and "MODE=" not in rules
 assert "--pair" in (stage / "usr/share/applications/nvidia-shield-p2570.desktop").read_text()
 inventory = json.loads((stage / "usr/share/doc/nvidia-shield-p2570-linux-preview/THIRD-PARTY-CRATES.json").read_text())
-assert inventory and all(item["source_in_archive"] for item in inventory)
+assert inventory and all(item["source_in_archive"] and item["notices"] for item in inventory)
 assert (out / "source/shieldd-upstream/vendor-cargo").is_dir()
 stubs = out / "maintainer-stubs"
 stubs.mkdir()
