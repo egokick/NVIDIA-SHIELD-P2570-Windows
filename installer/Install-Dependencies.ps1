@@ -85,10 +85,18 @@ function Allow-ElevatedDriverRead([string]$Path) {
     # These are public, signed installers only. Pairing files and directories
     # retain their private ACL. A different administrator entered at UAC must
     # be able to read the executable, but never receives write permission here.
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $sid = $identity.User
     $acl = Get-Acl -LiteralPath $Path
-    if (-not $sid.Equals($acl.GetOwner([Security.Principal.SecurityIdentifier]))) { throw 'The driver download belongs to a different Windows account.' }
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    # Elevated Windows processes can create files owned by Administrators.
+    # Accept that owner only for an already elevated administrator, then use
+    # the same explicit per-user ownership as an ordinary desktop install.
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    $adminOwned = $owner.Value -eq 'S-1-5-32-544' -and $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $sid.Equals($owner) -and -not $adminOwned) { throw 'The driver download belongs to a different Windows account.' }
     $fileAcl = New-Object Security.AccessControl.FileSecurity
+    $fileAcl.SetOwner($sid)
     $fileAcl.SetAccessRuleProtection($true,$false)
     $fileAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'))
     foreach ($publicReader in @('S-1-5-32-544','S-1-5-18')) {

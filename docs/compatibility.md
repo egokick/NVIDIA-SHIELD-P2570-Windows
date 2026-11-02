@@ -12,7 +12,8 @@ The controller used Ozmo firmware 81. The app's guided pairing runs on Windows w
 
 - Windows 11 24H2+ APIs and x64 are required. Windows 10 and ARM64 are not release targets.
 - This release requires exactly one enabled Wi-Fi adapter. The WCN pairing provider does not expose a reliable adapter-selection constraint, so an ambiguous radio setup is rejected.
-- Only actual 5 GHz channel 36 has been verified. If Windows chooses a different channel, the app stops with a diagnostic instead of claiming success.
+- The current Windows app explicitly requests **5 GHz** and requires **channel 36**. It does not currently support a 2.4 GHz controller connection. This is a software support boundary, not a claim that the P2570 hardware cannot use 2.4 GHz. The separate Linux preview uses upstream shieldd's 2.4 GHz backend with its dedicated USB adapter. If Windows chooses a different channel, this app stops with a diagnostic instead of claiming success.
+- The controller connects directly to the PC. Your router's Wi-Fi band does not need to match the controller link. Using Wi-Fi for both the Internet uplink and controller link still depends on the PC adapter and driver; Ethernet is the tested uplink.
 - Windows Mobile Hotspot requires an eligible uplink. Ethernet is the tested choice. Sharing an existing Wi-Fi connection depends on the adapter and driver and is not independently verified.
 - The app must own the hotspot session. Stop an already running hotspot before connecting.
 - A hotspot's IP-client count can remain zero for this controller. That count is not used to decide whether the controller is connected; real Ozmo gamepad reports are required.

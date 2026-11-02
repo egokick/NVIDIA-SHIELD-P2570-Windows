@@ -21,6 +21,7 @@ $parentBefore = (Get-Acl -LiteralPath $fixture).Sddl
 NoLinks $file; Allow-ElevatedDriverRead $file
 $acl = Get-Acl -LiteralPath $file; $rules = @($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw 'Public driver owner was not scoped to the installing user.' }
 if (-not $acl.AreAccessRulesProtected -or $rules.Count -ne 3) { throw 'Public driver ACL was not scoped to three identities.' }
 foreach ($rule in $rules) {
     if ($rule.AccessControlType -ne 'Allow') { throw 'Unexpected deny rule.' }
