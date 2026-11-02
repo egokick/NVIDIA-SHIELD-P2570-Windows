@@ -16,7 +16,9 @@ No accounts. No terminal commands. No dependency hunting. First-time setup needs
 
 **Make it yours.** Adjust trackpad speed, change any button, or reset everything with one click. Closing the window keeps your controller running in the tray.
 
-You'll need an **original P2570** and a **PC Wi-Fi adapter that supports 5 GHz** for this Windows app. Your router does not need to use 5 GHz. Ethernet is recommended. [Check your PC](docs/compatibility.md) · [Pairing picture and help](docs/guide.md)
+Your **NVIDIA SHIELD P2570 connects directly to your computer over Wi-Fi**. The controller hardware supports **2.4 GHz and 5 GHz**; your router is not involved in this connection.
+
+*Windows v0.3.0 uses 5 GHz only. Support for 2.4 GHz is in development.* [Check compatibility](docs/compatibility.md) · [Pairing picture and help](docs/guide.md)
 
 [Linux preview and macOS status](docs/platforms.md) · [Build from source](BUILDING.md) · [All releases](https://github.com/egokick/NVIDIA-SHIELD-P2570-Windows/releases)
 
