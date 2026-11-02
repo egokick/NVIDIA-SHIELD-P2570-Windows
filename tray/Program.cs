@@ -116,7 +116,7 @@ internal static class SelfTests
 {
     internal static int Run()
     {
-        int checks = 0;
+        int checks = ConnectionSettings.SelfTest();
         checks += PairingFlowTests.Run();
         checks += ControlProfileTests.Run();
         checks += ControlMappingsTests.Run();

@@ -28,7 +28,7 @@ internal static partial class Program
         {
             if (!prior.OwnedStart || prior.GroupId is not Guid group || prior.GroupMac is null ||
                 manager.TetheringOperationalState != TetheringOperationalState.On || !ChannelInspection.ActiveGroups().SequenceEqual(new[] { group }) ||
-                !GroupMac(group).SequenceEqual(prior.GroupMac.Select(b => (byte)b)) || ChannelInspection.Read(group) != config.Channel ||
+                !GroupMac(group).SequenceEqual(prior.GroupMac.Select(b => (byte)b)) || ChannelInspection.Read(group) != prior.Channel ||
                 !await Task.Run(() => ChannelInspection.ReadSsidEquals(group, config.Ssid)).WaitAsync(TimeSpan.FromSeconds(2)))
                 throw new InvalidOperationException("Active AP does not match the recorded owner. Turn it off explicitly before Recover.");
         }

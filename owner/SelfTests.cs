@@ -6,7 +6,7 @@ internal static partial class Program
 {
     private static async Task<int> SelfTest()
     {
-        int count = 0;
+        int count = ConnectionSettings.SelfTest();
         void Check(bool value) { if (!value) throw new InvalidOperationException("Offline contract check failed."); count++; }
         Check(WifiPermissionDenied(new UnauthorizedAccessException()));
         Check(WifiPermissionDenied(new System.Runtime.InteropServices.COMException("Denied", unchecked((int)0x80070005))));
@@ -22,6 +22,11 @@ internal static partial class Program
         string recoveryJson = System.Text.Json.JsonSerializer.Serialize(new { schema = 1, session_id = new string('a', 32), config_sha256 = value.SourceSha256,
             owner_pid = 123, owner_creation_filetime = 456UL, original_idle_timeout_enabled = true, owned_start_success = false });
         Check(RecoveryState.Parse(Encoding.UTF8.GetBytes(recoveryJson), value).OwnerPid == 123);
+        foreach (int channel in new[] { 6, 36, 48 }) {
+            var state = new RecoveryState { SessionId = new string('a', 32), ConfigHash = value.SourceSha256, OwnerPid = 123, OwnerCreation = 456,
+                OwnedStart = true, GroupId = Guid.NewGuid(), GroupMac = [2, 1, 2, 3, 4, 5], Channel = channel };
+            Check(RecoveryState.Parse(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(state), value).Channel == channel);
+        }
         foreach (string invalidRecovery in new[] {
             recoveryJson.Replace("\"owner_pid\":123", "\"owner_pid\":0"),
             recoveryJson.Replace("\"owned_start_success\":false", "\"owned_start_success\":false,\"idle_disable_planned\":true"),
@@ -31,7 +36,7 @@ internal static partial class Program
         { bool rejected = false; try { RecoveryState.Parse(Encoding.UTF8.GetBytes(invalidRecovery), value); } catch (FormatException) { rejected = true; } Check(rejected); }
         foreach (string invalid in new[] { valid.Replace("\"schema\":1", "\"schema\":2"), valid.Replace("\"schema\":1", "\"schema\":1,\"schema\":1"),
             valid.Replace("\"schema\":1", "\"schema\":1,\"unknown\":1"), valid.Replace("[2,1,2,3,4,5]", "[3,1,2,3,4,5]"), valid.Replace("[2,1,2,3,4,5]", "null"),
-            valid.Replace("36", "11"), valid.Replace("SyntheticOnly123", "short"), valid.Replace("DIRECT-TEST", "DIRECT-\u00e9"), valid.Replace("\"passphrase\":\"SyntheticOnly123\"", "\"passphrase\":null") })
+            valid.Replace("36", "149"), valid.Replace("SyntheticOnly123", "short"), valid.Replace("DIRECT-TEST", "DIRECT-\u00e9"), valid.Replace("\"passphrase\":\"SyntheticOnly123\"", "\"passphrase\":null") })
         { bool rejected = false; try { Configuration.Parse(Encoding.UTF8.GetBytes(invalid)); } catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException) { rejected = true; } Check(rejected); }
         Check(OwnsSuccessfulStart(TetheringOperationStatus.Success) && !OwnsSuccessfulStart(TetheringOperationStatus.AlreadyOn));
         Check(EmptyHotspot(TetheringOperationalState.Off, 0) && !EmptyHotspot(TetheringOperationalState.Off, 1));
@@ -43,7 +48,7 @@ internal static partial class Program
         var cancelled = await CancelAndSettle(() => { }, Task.FromCanceled<int>(new CancellationToken(true)), TimeSpan.FromMilliseconds(1));
         Check(!cancelled.HasResult && !cancelled.Pending);
         Check(new UTF8Encoding(false).GetBytes("alive\n").SequenceEqual(new byte[] { 97, 108, 105, 118, 101, 10 }));
-        Check(ChannelInspection.IsExpectedChannel(36) && !ChannelInspection.IsExpectedChannel(11));
+        Check(ChannelInspection.IsExpectedChannel(36) && ChannelInspection.IsExpectedChannel(11) && !ChannelInspection.IsExpectedChannel(149));
         byte[] attributes = new byte[604]; attributes[0] = 1; attributes[520] = 4; Encoding.ASCII.GetBytes("TEST").CopyTo(attributes, 524);
         Check(ChannelInspection.SsidEquals(attributes, "TEST") && !ChannelInspection.SsidEquals(attributes, "test"));
         attributes[520] = 33; bool malformed = false;

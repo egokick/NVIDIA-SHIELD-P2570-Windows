@@ -174,7 +174,7 @@ internal static class Program
                 CreateShortcut();
                 Stage("register-uninstaller");
                 using var key = Registry.CurrentUser.CreateSubKey(RegistryPath);
-                key.SetValue("DisplayName", Product); key.SetValue("DisplayVersion", "0.3.0");
+                key.SetValue("DisplayName", Product); key.SetValue("DisplayVersion", "0.4.0");
                 key.SetValue("Publisher", "egokick and contributors"); key.SetValue("InstallLocation", Root);
                 key.SetValue("DisplayIcon", Tray); key.SetValue("URLInfoAbout", "https://github.com/egokick/NVIDIA-SHIELD-P2570-Windows");
                 string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe");

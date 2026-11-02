@@ -77,10 +77,10 @@ internal static partial class Program
         Requirement("uplink", "Active Internet connection required by the current Windows Mobile Hotspot path", uplinks.Count > 0);
         Configuration? configured = null; try { configured = Configuration.Load(PrivateFiles.Config); } catch { }
         bool paired = configured is not null && ProvisionMatches(configured);
-        Requirement("channel", "A 5 GHz Wi-Fi Direct group on channel 36 is required (verified at Start)", true);
+        Requirement("channel", "A supported 2.4 GHz or 5 GHz controller channel is required (verified at Start)", true);
         Log("capabilities", new { paired, recovery_required = File.Exists(PrivateFiles.Recovery) || File.Exists(SetupActive), requirements,
             wifi_adapters = wifi, uplink_adapters = uplinks, selected_wifi_guid = configured?.Wifi, selected_uplink_guid = configured?.Uplink,
-            runtime_supported = supported, channel = 36, offline_uplink_supported = false });
+            runtime_supported = supported, band_preference = ConnectionSettings.Load(), offline_uplink_supported = false });
         return 0;
     }
 }

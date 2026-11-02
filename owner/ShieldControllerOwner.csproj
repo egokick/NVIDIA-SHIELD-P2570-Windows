@@ -9,4 +9,5 @@
     <PlatformTarget>x64</PlatformTarget>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+  <ItemGroup><Compile Include="../contracts/ConnectionSettings.cs" Link="ConnectionSettings.cs" /></ItemGroup>
 </Project>

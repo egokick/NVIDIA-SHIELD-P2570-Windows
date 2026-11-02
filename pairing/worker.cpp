@@ -285,7 +285,7 @@ int wmain(int argc,wchar_t** argv) {
                 // Managed supervisor checks the actual unique bootstrap GO channel
                 // and exact chosen PC interfaces before authorizing any Set call.
                 line("{\"phase\":\"provision_ready\"}");std::string approval;std::getline(std::cin,approval);
-                if(approval!="approve-channel-36"||notify->FreshTargetId()!=retainedId)throw 1;
+                if(approval!="approve-bootstrap-channel"||notify->FreshTargetId()!=retainedId)throw 1;
                 line("{\"phase\":\"private_profile_queue_begin\"}");hr=device->SetNetworkProfile(profile.c_str());checkpoint("set_network_profile",hr);
                 // Retain only until GetNetworkProfile after successful completion;
                 // never serialize this private input or the returned XML.

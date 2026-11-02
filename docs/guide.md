@@ -21,7 +21,7 @@ The app installer includes its .NET runtime and the gamepad driver. A first inst
 
 - **Windows 11 24H2 or later, x64.** The app checks for the required Windows networking APIs.
 - An original **NVIDIA SHIELD P2570** with sufficient battery charge.
-- A Wi-Fi adapter with Windows Mobile Hotspot support and **5 GHz channel 36** available. Attach the PC's Wi-Fi antenna.
+- A Wi-Fi adapter with Windows Mobile Hotspot support on **2.4 GHz or 5 GHz**. Attach the PC's Wi-Fi antenna. Automatic prefers 5 GHz; choose a band in **Settings → Controller Wi-Fi band**. A change takes effect the next time you connect.
 - **Exactly one enabled Wi-Fi adapter.** Disable additional Wi-Fi adapters while using this release; Bluetooth adapters do not count.
 - An active Internet-capable network connection for Windows Mobile Hotspot. **Ethernet is recommended.**
 - **Npcap and ViGEmBus.** Setup handles both. The correct Npcap options are preselected; approve its licence and Windows prompts when asked.

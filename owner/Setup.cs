@@ -48,6 +48,7 @@ internal static partial class Program
     private static async Task<int> Setup(string mode, Guid wifi, Guid uplink, string targetHash)
     {
         bool pair = mode == "pair";
+        int? bootstrapChannel = null;
         PrivateFiles.RequirePrivate(Root, true); PrivateFiles.CreateDirectory(SetupRoot);
         Configuration? candidate = null; DiscoveredTarget? selected = null;
         string pendingPath = Path.Combine(SetupRoot, "candidate.json");
@@ -115,9 +116,10 @@ internal static partial class Program
                         if (!pair) throw new FormatException("Unexpected provision request.");
                         checkpoint = "pairing-bootstrap-channel";
                         Guid[] groups = ChannelInspection.ActiveGroups();
-                        if (groups.Length != 1 || await Task.Run(() => ChannelInspection.Read(groups[0])).WaitAsync(TimeSpan.FromSeconds(2)) != 36 || UplinkState() != prepared.UplinkAddressState)
-                            throw new InvalidOperationException("WCN bootstrap must use channel36 and the selected interfaces.");
-                        channelApproved = true; await process.StandardInput.WriteLineAsync("approve-channel-36"); await process.StandardInput.FlushAsync(); process.StandardInput.Close();
+                        if (groups.Length == 1) bootstrapChannel = await Task.Run(() => ChannelInspection.Read(groups[0])).WaitAsync(TimeSpan.FromSeconds(2));
+                        if (!bootstrapChannel.HasValue || !ConnectionSettings.ValidChannel(bootstrapChannel.Value) || UplinkState() != prepared.UplinkAddressState)
+                            throw new InvalidOperationException("WCN bootstrap must use a supported controller channel and the selected interfaces.");
+                        channelApproved = true; await process.StandardInput.WriteLineAsync("approve-bootstrap-channel"); await process.StandardInput.FlushAsync(); process.StandardInput.Close();
                     }
                     if (phase == "connect_begin") connectAttempted = true;
                     if (phase == "connect_succeeded") callback = true;
@@ -173,10 +175,13 @@ internal static partial class Program
         if (okay && pair)
         {
             checkpoint = "persist-pairing";
+            candidate = Configuration.Parse(JsonSerializer.SerializeToUtf8Bytes(new { schema = candidate!.Schema, wifi_guid = candidate.Wifi,
+                uplink_guid = candidate.Uplink, controller_mac = candidate.ControllerMac, channel = bootstrapChannel!.Value,
+                ssid = candidate.Ssid, passphrase = candidate.Passphrase }));
             PrivateFiles.WriteAtomic(PrivateFiles.Config, candidate!); config = Configuration.Load(PrivateFiles.Config);
             PrivateFiles.WriteAtomic(ProvisionReceipt, new { schema = 1, utc = DateTimeOffset.UtcNow, pairing_success = true, identity_confirmed = true,
-                connect_success_callback_observed = true, pc_cleanup_verified = true, config_sha256 = config.SourceSha256, channel = 36, key_representation = "networkKey" });
-            Log("pairing-succeeded", new { durable_configuration = true, channel = 36, wireless_input_verified = false }, true);
+                connect_success_callback_observed = true, pc_cleanup_verified = true, config_sha256 = config.SourceSha256, channel = config.Channel, bootstrap_channel = bootstrapChannel, key_representation = "networkKey" });
+            Log("pairing-succeeded", new { durable_configuration = true, bootstrap_channel = bootstrapChannel, wireless_input_verified = false }, true);
         }
         else if (okay)
         {

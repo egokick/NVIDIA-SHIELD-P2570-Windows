@@ -23,7 +23,7 @@ internal sealed class Configuration
                 throw new FormatException("Configuration has duplicate fields or an invalid shape.");
         var value = JsonSerializer.Deserialize<Configuration>(bytes, StrictJson) ?? throw new FormatException("Configuration is empty.");
         if (value.ControllerMac is null || value.Ssid is null || value.Passphrase is null || value.Schema != 1 || value.Wifi == Guid.Empty || value.Uplink == Guid.Empty ||
-            value.Channel != 36 || value.ControllerMac.Length != 6 || value.ControllerMac.Any(b => b is < 0 or > 255) ||
+            !ConnectionSettings.ValidChannel(value.Channel) || value.ControllerMac.Length != 6 || value.ControllerMac.Any(b => b is < 0 or > 255) ||
             value.ControllerMac.All(b => b == 0) || (value.ControllerMac[0] & 1) != 0 ||
             value.Ssid.Length is < 1 or > 32 || !value.Ssid.StartsWith("DIRECT-", StringComparison.Ordinal) ||
             value.Passphrase.Length is < 8 or > 63 || value.Ssid.Any(c => c < 32 || c > 126) || value.Passphrase.Any(c => c < 32 || c > 126))

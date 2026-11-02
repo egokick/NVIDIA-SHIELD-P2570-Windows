@@ -12,12 +12,13 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Product>NVIDIA SHIELD P2570 for Windows</Product>
     <Description>Wireless gamepad connection and pairing for the NVIDIA SHIELD P2570.</Description>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../contracts/ConnectionSettings.cs" Link="ConnectionSettings.cs" />
     <EmbeddedResource Include="..\assets\controller.ico" LogicalName="controller.ico" />
     <EmbeddedResource Include="..\contracts\default-controls.json" LogicalName="default-controls.json" />
   </ItemGroup>

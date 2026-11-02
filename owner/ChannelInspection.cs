@@ -14,7 +14,7 @@ internal static class ChannelInspection
         .Where(n => n.OperationalStatus == OperationalStatus.Up && IsBaseGroup(n.Description))
         .Select(n => Guid.Parse(n.Id)).ToArray();
     internal static bool IsBaseGroup(string name) => Regex.IsMatch(name, @"\AMicrosoft Wi-Fi Direct Virtual Adapter(?: #\d+)?\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    internal static bool IsExpectedChannel(int channel) => channel == 36;
+    internal static bool IsExpectedChannel(int channel) => ConnectionSettings.ValidChannel(channel);
     internal static bool SsidEquals(ReadOnlySpan<byte> attributes, string expected)
     {
         if (attributes.Length < 604 || BinaryPrimitives.ReadUInt32LittleEndian(attributes) != 1) throw new InvalidOperationException("Invalid connection attributes.");

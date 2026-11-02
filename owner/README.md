@@ -19,7 +19,7 @@ First pairing:
 3. `--mode pair --target-id-hash HASH --wifi-guid GUID --uplink-guid GUID` uses
    that explicit selection. The controller must still be in push-button mode.
    It rechecks a fresh WCN device's physical address, Ozmo/nVidiaBlake identity
-   and push-button support. The actual bootstrap channel must be 36 before any
+   and push-button support. The actual bootstrap channel must be 1-11 or 36/40/44/48 before any
    profile or password setter is permitted.
 
 Pairing uses a randomly generated private DIRECT SSID/passphrase and sends the
@@ -38,7 +38,7 @@ Session commands:
 - `--mode validate` checks the installed package, current pairing receipt and
   read-only prerequisites.
 - `--mode run --session ABSOLUTE_SESSION_DIRECTORY --parent-pid PID
-  --parent-creation-filetime FILETIME` starts one temporary per-session 5 GHz
+  --parent-creation-filetime FILETIME` starts one temporary per-session 2.4 GHz or 5 GHz
   hotspot. Session directory is directly below `sessions/`, named 32 hex digits.
   It may contain the launcher's stdout/stderr files but no previous owner state.
 - Create `request-stop` in that session directory to stop. The launcher process
@@ -53,7 +53,7 @@ Session commands:
   confirmation; the controller's own firmware/settings are not changed. Use this
   before selecting a different controller or different adapters.
 
-The owner validates actual channel 36 and SSID before launching its exact package
+The owner validates the actual channel against the selected band and checks the SSID before launching its exact package
 data host. It sends `alive\n` each second and closes stdin before stopping its AP.
 It restores the original global no-clients idle timeout. The public Windows API
 has no per-session ownership token; exclusivity is checked before start and the
@@ -67,8 +67,12 @@ Wi-Fi client counts alone are not connection proof. Event histories are bounded
 to a current 1 MiB file and one previous file. Session receipts are authoritative.
 
 Requirements for this release: Windows 11 build 26100+, Npcap with AdminOnly=0,
-ViGEmBus, a suitable 5 GHz Wi-Fi Direct adapter, and an active Internet uplink.
-Offline operation and channels other than 36 are not validated implementations.
+ViGEmBus, a suitable 2.4 GHz or 5 GHz Wi-Fi adapter, and an active Internet uplink.
+`connection.json` stores the tray's band choice separately from pairing credentials.
+Automatic prefers 5 GHz; if unsupported, it chooses 2.4 GHz. RadioRestriction or
+BandInterference can trigger one 2.4 GHz retry only after a verified empty hotspot.
+Manual choices never switch silently. Recovery pins the actual session channel,
+independently of subsequent preference changes. Offline operation is not supported.
 The owner never changes USB drivers, Wi-Fi registry settings or persistent hotspot
 credentials. Windows Mobile Hotspot can temporarily affect Internet-sharing state;
 the receipt distinguishes directly verified restoration from unmeasured ICS internals.

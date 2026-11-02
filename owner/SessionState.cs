@@ -40,6 +40,7 @@ internal sealed class RecoveryState
     [JsonPropertyName("original_idle_timeout_enabled")] public bool OriginalIdleTimeout { get; init; }
     [JsonPropertyName("owned_start_success")] public bool OwnedStart { get; set; }
     [JsonPropertyName("go_guid")] public Guid? GroupId { get; set; }
+    [JsonPropertyName("channel")] public int Channel { get; set; }
     [JsonPropertyName("go_mac")] public int[]? GroupMac { get; set; }
     [JsonPropertyName("idle_disable_planned")] public bool IdleDisablePlanned { get; set; }
     [JsonPropertyName("child_pid")] public int? ChildPid { get; set; }
@@ -55,7 +56,7 @@ internal sealed class RecoveryState
         if (state.Schema != 1 || state.SessionId is null || state.ConfigHash is null || state.SessionId.Length != 32 || !state.SessionId.All(Uri.IsHexDigit) || state.OwnerPid <= 0 || state.OwnerCreation == 0 ||
             !state.ConfigHash.Equals(config.SourceSha256, StringComparison.OrdinalIgnoreCase) ||
             state.GroupId.HasValue != (state.GroupMac is not null) ||
-            (state.GroupId.HasValue && (state.GroupId == Guid.Empty || state.GroupMac!.Length != 6 || state.GroupMac.Any(b => b is < 0 or > 255) || state.GroupMac.All(b => b == 0) || (state.GroupMac[0] & 1) != 0)) ||
+            (state.GroupId.HasValue && (!ConnectionSettings.ValidChannel(state.Channel) || state.GroupId == Guid.Empty || state.GroupMac!.Length != 6 || state.GroupMac.Any(b => b is < 0 or > 255) || state.GroupMac.All(b => b == 0) || (state.GroupMac[0] & 1) != 0)) ||
             (!state.OwnedStart && state.GroupId.HasValue) ||
             (state.IdleDisablePlanned && (!state.OriginalIdleTimeout || !state.OwnedStart || !state.GroupId.HasValue)) ||
             state.ChildPid.HasValue != state.ChildCreation.HasValue ||

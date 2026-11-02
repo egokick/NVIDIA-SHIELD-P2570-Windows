@@ -16,7 +16,7 @@ Use the managed owner's setup commands. The internal worker's stdout pipe contai
 physical addresses only in `private_candidate` records. The owner consumes those
 records into its user-only cache; it never forwards them to UI or event history.
 All profile/key material goes through stdin, never a command line or environment.
-The worker waits for a supervisor channel-36 acknowledgement before provisioning,
+The worker waits for a supervisor acknowledgement of a supported bootstrap channel before provisioning,
 then rechecks that the retained device is still the fresh selected target.
 
 WCN Unadvise is not cancellation. Process timeout cannot prove device settings

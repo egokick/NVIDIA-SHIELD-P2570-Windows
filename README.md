@@ -18,7 +18,7 @@ No accounts. No terminal commands. No dependency hunting. First-time setup needs
 
 Your **NVIDIA SHIELD P2570 connects directly to your computer over Wi-Fi**. The controller hardware supports **2.4 GHz and 5 GHz**; your router is not involved in this connection.
 
-*Windows v0.3.0 uses 5 GHz only. Support for 2.4 GHz is in development.* [Check compatibility](docs/compatibility.md) · [Pairing picture and help](docs/guide.md)
+The app prefers **5 GHz**, then uses **2.4 GHz** when 5 GHz is unavailable. Choose either band in **Settings → Controller Wi-Fi band**. Ethernet is the recommended Internet connection. [Check compatibility](docs/compatibility.md) · [Pairing picture and help](docs/guide.md)
 
 [Linux preview and macOS status](docs/platforms.md) · [Build from source](BUILDING.md) · [All releases](https://github.com/egokick/NVIDIA-SHIELD-P2570-Windows/releases)
 

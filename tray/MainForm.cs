@@ -17,6 +17,8 @@ internal sealed class MainForm : Form
     private readonly Font titleFont = new("Segoe UI Semibold", 27), compactTitleFont = new("Segoe UI Semibold", 23);
     private readonly ChoicePicker wifi = new("Choose Wi-Fi"), uplink = new("Choose internet connection"), candidates = new("Choose your controller");
     private readonly Button disconnect = new(), refresh = new(), forget = new();
+    private readonly ChoicePicker band = new("Choose a band");
+    private readonly Label bandHint = TextLabel("Automatic uses 5 GHz when available, otherwise 2.4 GHz.", 9);
     private readonly ToolStripMenuItem trayConnect = new("Connect"), trayPair = new("Pair controller…"), trayForget = new("Forget controller…");
     private readonly SetupScrollPanel home = new(), settings = new(), help = new();
     private readonly TableLayoutPanel page = new();
@@ -227,10 +229,20 @@ internal sealed class MainForm : Form
     }
     private void BuildSettings()
     {
-        var layout = SecondaryPage(settings, "Settings", 620);
+        var layout = SecondaryPage(settings, "Settings", 740);
         AddRow(layout, TextLabel("The app chooses these for you when it can."), 42);
         AddRow(layout, TextLabel("Controller Wi-Fi", 10, true), 28); StylePicker(wifi); AddRow(layout, wifi, 42);
         AddRow(layout, TextLabel("Internet connection", 10, true), 30); StylePicker(uplink); AddRow(layout, uplink, 42);
+        AddRow(layout, TextLabel("Controller Wi-Fi band", 10, true), 30); StylePicker(band); AddRow(layout, band, 42);
+        band.SetItems(ConnectionSettings.Choices);
+        try { band.SelectedIndex = preview ? 0 : ConnectionSettings.Load(); }
+        catch { bandHint.Text = "Saved band could not load. Choose a band to repair it."; }
+        band.SelectedIndexChanged += (_, _) => {
+            if (preview || band.SelectedIndex < 0) return;
+            try { OwnerClient.CreatePrivateDirectory(OwnerClient.Root); ConnectionSettings.Save(band.SelectedIndex); bandHint.Text = Running ? "Saved. Disconnect and connect to use this band." : "Saved. Used when you connect your controller."; }
+            catch { bandHint.Text = "Could not save. Choose the band again to retry."; }
+        };
+        AddRow(layout, bandHint, 52);
         wifi.SelectedIndexChanged += (_, _) => { candidates.SetItems([]); searchEmpty = false; ApplyState(); };
         uplink.SelectedIndexChanged += (_, _) => { candidates.SetItems([]); searchEmpty = false; ApplyState(); };
         requirements.Dock = DockStyle.Fill; requirements.Margin = new Padding(0, 14, 0, 0); requirements.ForeColor = Palette.Muted; AddRow(layout, requirements, 62);
@@ -267,6 +279,7 @@ internal sealed class MainForm : Form
     private void ApplyState()
     {
         bool locked = busy || owner.CommandPending || exiting;
+        band.Enabled = !locked;
         badge.Text = model.State == ControllerState.Connected ? "●  CONNECTED WIRELESSLY" : model.Paired ? (Running && !model.TransportReady ? "●  CONNECTING" : "○  DISCONNECTED · PAIRING SAVED") : "○  FIRST SETUP";
         badge.ForeColor = model.State == ControllerState.Connected ? Color.FromArgb(49, 111, 29) : Palette.Muted;
         if (tray is not null) tray.Text = "SHIELD · " + StatusModel.Title(model.State);

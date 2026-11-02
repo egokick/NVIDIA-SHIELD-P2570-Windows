@@ -59,7 +59,10 @@ impl OwnerReceipt {
             self.schema == 1 && self.owner_pid > 0 && self.owner_creation_filetime > 0,
             "invalid_owner_schema"
         );
-        ensure!(self.channel == 36, "owner_not_channel36");
+        ensure!(
+            matches!(self.channel, 1..=11 | 36 | 40 | 44 | 48),
+            "owner_unsupported_channel"
+        );
         ensure!(
             valid_mac(self.adapter_mac)
                 && valid_mac(self.controller_mac)
@@ -146,8 +149,21 @@ mod tests {
         r.controller_mac = [1; 6];
         assert!(r.validate(11000).is_err());
         r = receipt();
-        r.channel = 11;
+        r.channel = 149;
         assert!(r.validate(11000).is_err());
+    }
+    #[test]
+    fn accepts_supported_controller_bands_only() {
+        for channel in [1, 6, 11, 36, 40, 44, 48] {
+            let mut r = receipt();
+            r.channel = channel;
+            assert!(r.validate(11000).is_ok());
+        }
+        for channel in [0, 12, 14, 52, 149] {
+            let mut r = receipt();
+            r.channel = channel;
+            assert!(r.validate(11000).is_err());
+        }
     }
     #[test]
     fn rejects_invalid_guid_session_and_hash() {

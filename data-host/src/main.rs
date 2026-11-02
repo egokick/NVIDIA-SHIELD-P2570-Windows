@@ -164,7 +164,7 @@ fn main() {
     if !args.run {
         println!(
             "{}",
-            json!({"stage":"plan","hardware_opened":false,"required_channel":36,"gamepad_only":false,"touchpad_mouse":true,"desktop_buttons":true,"starts_or_stops_ap":false,"requires_installed_private_config":true,"lifetime":"owner process and heartbeat","owner_heartbeat":"alive\\n every <=1s; loss >=3s stops child"})
+            json!({"stage":"plan","hardware_opened":false,"supported_channels":[1,2,3,4,5,6,7,8,9,10,11,36,40,44,48],"gamepad_only":false,"touchpad_mouse":true,"desktop_buttons":true,"starts_or_stops_ap":false,"requires_installed_private_config":true,"lifetime":"owner process and heartbeat","owner_heartbeat":"alive\\n every <=1s; loss >=3s stops child"})
         );
         return;
     }
