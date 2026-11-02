@@ -1,4 +1,4 @@
-I lost the USB dongle for the control. This app allows the controller to connect directly to your computer over Wi-fi
+This app allows the controller to connect directly to your computer over Wi-fi, without the need for an NVIDIA shield or USB dongle. 
 <div align="center">
   <img src="assets/controller.png" width="80" alt="Green SHIELD controller app icon" />
   <h1>SHIELD. Untethered.</h1>
