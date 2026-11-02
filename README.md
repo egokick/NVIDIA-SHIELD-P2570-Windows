@@ -1,5 +1,7 @@
 # NVIDIA SHIELD P2570 for Windows
 
+<img src="https://raw.githubusercontent.com/egokick/NVIDIA-SHIELD-P2570-Windows/main/assets/controller.png" width="96" alt="SHIELD controller app logo: green gamepad with a Wi-Fi signal" />
+
 Use the **original NVIDIA SHIELD P2570 controller wirelessly** as an Xbox-compatible gamepad on Windows. A small tray app guides you through pairing and shows whether the controller is paired, waiting to connect, or connected.
 
 **[Download the Windows installer](https://github.com/egokick/NVIDIA-SHIELD-P2570-Windows/releases/latest)**

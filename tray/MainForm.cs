@@ -8,6 +8,7 @@ internal sealed class MainForm : Form
     private readonly OwnerClient owner = new();
     private readonly StatusModel model = new();
     private readonly NotifyIcon? tray;
+    private readonly Icon appIcon = AppIcon.Load();
     private readonly Label stateLabel = new(), description = new(), requirements = new(), activity = new();
     private readonly ChoicePicker wifi = new("Select Wi-Fi adapter"), uplink = new("Select internet adapter"), candidates = new("Search to find a controller");
     private readonly Button connect = new(), pair = new(), refresh = new(), recover = new();
@@ -30,7 +31,7 @@ internal sealed class MainForm : Form
         MinimumSize = new Size(620, 450);
         StartPosition = FormStartPosition.CenterScreen;
         ShowInTaskbar = !preview;
-        Icon = SystemIcons.Application;
+        Icon = appIcon;
         AutoScaleMode = AutoScaleMode.Dpi;
         BuildControls();
         if (!preview)
@@ -45,7 +46,7 @@ internal sealed class MainForm : Form
             menu.Items.Add("Open log folder", null, (_, _) => OpenLogs());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Exit", null, async (_, _) => await ExitAsync());
-            tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "SHIELD P2570 · Not paired", ContextMenuStrip = menu, Visible = true };
+            tray = new NotifyIcon { Icon = appIcon, Text = "SHIELD P2570 · Not paired", ContextMenuStrip = menu, Visible = true };
             tray.DoubleClick += (_, _) => ShowWindow();
             owner.SessionEvent += e => Ui(() => { model.ApplySession(e); ApplyState(); });
             owner.SessionFailed += () => Ui(() => { model.Fail("The controller service returned an invalid status. Its wireless session is being stopped safely."); ApplyState(); });
@@ -290,5 +291,5 @@ internal sealed class MainForm : Form
             scrolled_png_sha256 = scrolledPath is null ? null : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(scrolledPath))),
             png_sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))) }));
     }
-    protected override void Dispose(bool disposing) { if (disposing) { stateTimer.Dispose(); tray?.Dispose(); owner.Dispose(); } base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if (disposing) { stateTimer.Dispose(); tray?.Dispose(); owner.Dispose(); } base.Dispose(disposing); if (disposing) appIcon.Dispose(); }
 }

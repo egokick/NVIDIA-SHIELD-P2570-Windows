@@ -43,7 +43,8 @@ internal static class Program
             if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) || !Environment.Is64BitOperatingSystem)
                 throw new InvalidOperationException("Windows 11 version 24H2 or later (64-bit) is required.");
             if (silent) { Install(); if (launch) Launch(); return 0; }
-            using var form = new Form { Text = Product + " — Setup", ClientSize = new Size(540, 310), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, Font = new Font("Segoe UI", 10), Icon = SystemIcons.Application };
+            using var setupIcon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
+            using var form = new Form { Text = Product + " — Setup", ClientSize = new Size(540, 310), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, Font = new Font("Segoe UI", 10), Icon = setupIcon };
             var title = new Label { Text = "Use your SHIELD controller wirelessly", Location = new Point(24,24), Size = new Size(492,36), Font = new Font("Segoe UI",15,FontStyle.Bold) };
             var body = new Label { Text = "Install the tray app, then follow its pairing guide.\n\nRequires a supported Wi-Fi adapter. Npcap and ViGEmBus are checked by the app; missing drivers open their official setup prompts.\n\nInstalls for your Windows account. No subscription or account needed.", Location = new Point(24,72), Size = new Size(492,148) };
             var start = new CheckBox { Text = "Open the app after installation", Checked = launch, Location = new Point(24,232), Size = new Size(300,28) };
