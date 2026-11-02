@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ShieldControllerSetup</AssemblyName>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\assets\controller.ico</ApplicationIcon>
@@ -16,6 +16,9 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\assets\controller.png" LogicalName="controller.png" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(PayloadPath)')">
     <EmbeddedResource Include="$(PayloadPath)" LogicalName="payload.zip" />
   </ItemGroup>

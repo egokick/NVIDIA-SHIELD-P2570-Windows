@@ -36,8 +36,10 @@ mod volume;
 struct Args {
     #[arg(long)]
     run: bool,
-    #[arg(long, conflicts_with = "run")]
+    #[arg(long, conflicts_with_all = ["run", "check_drivers"])]
     display_calibration: bool,
+    #[arg(long, conflicts_with = "run")]
+    check_drivers: bool,
     #[arg(long, requires = "run")]
     owner_receipt: Option<PathBuf>,
     #[arg(long, requires = "run")]
@@ -138,6 +140,17 @@ fn latest_batch(
 fn main() {
     std::panic::set_hook(Box::new(|_| eprintln!("{{\"stage\":\"panic_redacted\"}}")));
     let args = Args::parse();
+    if args.check_drivers {
+        // Verify that the installed native drivers can actually be opened.
+        // No packet capture, hotspot, controller or virtual pad is started.
+        let npcap = npcap::init_dll_path().is_ok() && pcap::Device::list().is_ok();
+        let vigem = vigem_client::Client::connect().is_ok();
+        println!(
+            "{}",
+            json!({"npcap":npcap,"vigem":vigem,"starts_or_stops_ap":false,"virtual_pad_created":false})
+        );
+        return;
+    }
     if args.display_calibration {
         match display::calibration() {
             Ok(value) => println!("{}", serde_json::to_string(&value).unwrap()),
@@ -509,6 +522,15 @@ mod tests {
     #[test]
     fn runtime_is_owner_scoped_not_diagnostic_duration() {
         assert!(!Args::try_parse_from(["host"]).unwrap().run);
+        assert!(
+            Args::try_parse_from(["host", "--check-drivers"])
+                .unwrap()
+                .check_drivers
+        );
+        assert!(Args::try_parse_from(["host", "--check-drivers", "--run"]).is_err());
+        assert!(
+            Args::try_parse_from(["host", "--check-drivers", "--display-calibration"]).is_err()
+        );
         assert!(Args::try_parse_from(["host", "--seconds", "900"]).is_err());
         assert!(Args::try_parse_from(["host", "--owner-receipt", "unused"]).is_err());
     }

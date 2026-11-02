@@ -11,6 +11,16 @@ The build downloads the official Npcap SDK for its import library; it does not p
 
 The package is staged in `debug/package/`. The standalone setup executable and checksum are written to `debug/release/`. The installer embeds the package and installs it for the current user, without requiring a separately installed .NET runtime.
 
+The installer build downloads and verifies the signed BSD-licensed ViGEmBus
+installer, includes its licence, and embeds it in the package. Npcap remains an
+official download inside the guided setup because its free licence does not
+permit redistribution or silent installation. The stable direct-download asset
+is `SHIELD-Controller-Setup.exe`; it is byte-identical to the versioned installer.
+
+Native Linux preview packaging and its separate build requirements are in
+[`platform/linux/README.md`](platform/linux/README.md). Platform support and
+remaining macOS work are documented in [`docs/platforms.md`](docs/platforms.md).
+
 Package staging must be a new directory. For another build, choose a fresh path with `./build.ps1 -OutputDirectory debug/package-next`, then pass that same path to `./installer/build-installer.ps1 -PackagePath debug/package-next`.
 
 ## Source layout

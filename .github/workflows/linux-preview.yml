@@ -1,0 +1,48 @@
+name: Linux preview package
+on:
+  push:
+    paths:
+      - 'platform/linux/**'
+      - 'assets/controller.png'
+      - '.github/workflows/linux-preview.yml'
+  pull_request:
+    paths:
+      - 'platform/linux/**'
+      - 'assets/controller.png'
+      - '.github/workflows/linux-preview.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Prepare build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libclang-dev libgtk-4-dev libpipewire-0.3-dev python3 git
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build and check native Linux preview
+        run: bash platform/linux/build-deb.sh 0.3.0 "$PWD/debug/linux-preview-build"
+      - name: Preserve preview and matching source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-preview-amd64
+          path: |
+            debug/linux-preview-build/*.deb
+            debug/linux-preview-build/*-source.tar.gz
+            debug/linux-preview-build/LINUX-SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Preserve diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-preview-diagnostics
+          path: |
+            debug/linux-preview-build/*.txt
+            debug/linux-preview-build/*.json
+          if-no-files-found: ignore

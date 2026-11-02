@@ -172,6 +172,7 @@ internal sealed class MappingRow : Panel
         CommitChoice(selected);
     }
     internal ControlBinding CurrentBinding => binding with { };
+    internal MappingPicker ActionPicker => choice;
     internal void RenderChoicesPreview(string path) => choice.RenderMenuPreview(path);
     internal bool CommitChoice(MappingChoice selected)
     {
@@ -209,6 +210,7 @@ internal sealed class MappingPicker : Button
     private MappingChoice[] items = [];
     private int selectedIndex = -1;
     private bool hover;
+    private ContextMenuStrip? openMenu;
     internal event EventHandler? SelectedIndexChanged;
     internal MappingChoice? SelectedItem => selectedIndex >= 0 && selectedIndex < items.Length ? items[selectedIndex] : null;
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
@@ -232,8 +234,16 @@ internal sealed class MappingPicker : Button
     protected override void OnClick(EventArgs e)
     {
         base.OnClick(e);
-        var menu = BuildMenu();
-        menu.Closed += (_, _) => menu.Dispose(); menu.Show(this, new Point(0, Height));
+        PrepareMenu().Show(this, new Point(0, Height));
+    }
+    internal ContextMenuStrip PrepareMenu()
+    {
+        if (openMenu is { Visible: true }) return openMenu;
+        // WinForms still uses the dropdown after raising Closed. Keep it alive
+        // through item-click/modal-dialog processing; retire it on the next
+        // opening, or when this owning control is disposed.
+        openMenu?.Dispose();
+        return openMenu = BuildMenu();
     }
     internal void RenderMenuPreview(string path)
     {
@@ -248,7 +258,11 @@ internal sealed class MappingPicker : Button
         var menu = new ContextMenuStrip { Font = new Font("Segoe UI", 10), ShowImageMargin = false };
         ToolStripMenuItem Entry(int index) {
             var entry = new ToolStripMenuItem(items[index].Label) { Checked = index == selectedIndex };
-            entry.Click += (_, _) => SelectedIndex = index; return entry;
+            entry.Click += (_, _) => {
+                menu.Close(ToolStripDropDownCloseReason.ItemClicked);
+                SelectedIndex = index;
+            };
+            return entry;
         }
         for (int i = 0; i < items.Length; i++) if (items[i].Kind != "key") menu.Items.Add(Entry(i));
         menu.Items.Add(new ToolStripSeparator());
@@ -266,6 +280,11 @@ internal sealed class MappingPicker : Button
             keyboard.DropDownItems.Add(category);
         }
         return menu;
+    }
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { openMenu?.Dispose(); openMenu = null; }
+        base.Dispose(disposing);
     }
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {

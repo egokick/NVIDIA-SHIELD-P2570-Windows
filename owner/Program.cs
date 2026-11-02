@@ -121,7 +121,7 @@ internal static partial class Program
     private static async Task<Prepared> Prepare()
     {
         checkpoint = "read-only-preflight";
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new InvalidOperationException("Windows11 build26100 or later is required.");
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) || System.Runtime.InteropServices.RuntimeInformation.OSArchitecture != System.Runtime.InteropServices.Architecture.X64) throw new InvalidOperationException("Windows 11 24H2 or later on an Intel or AMD x64 PC is required.");
         if (!ApiInformation.IsTypePresent("Windows.Networking.NetworkOperators.NetworkOperatorTetheringSessionAccessPointConfiguration") ||
             !ApiInformation.IsMethodPresent("Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager", "StartTetheringAsync", 1))
             throw new InvalidOperationException("Per-session API unavailable.");

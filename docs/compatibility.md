@@ -28,4 +28,8 @@ If Windows or the driver refuses cleanup, open the local logs for the failed che
 
 [Npcap's official licence](https://npcap.com/oem/redist) restricts redistribution and silent installation of the free edition. This project does not bundle Npcap. Its helper downloads an unmodified official installer directly, verifies the pinned SHA-256 and Authenticode publisher, then opens its interactive setup. Enterprises must check their own Npcap licence requirements.
 
-ViGEmBus is BSD-3-Clause licensed and archived upstream. The app uses the final official signed 1.22.0 installer, which removed its old updater. The app does not uninstall shared drivers.
+ViGEmBus is BSD-3-Clause licensed and archived upstream. Setup includes the final official signed 1.22.0 installer and its licence, and installs it automatically after Windows approval. This version removed its old updater. The app does not uninstall shared drivers.
+
+Setup verifies both drivers can be opened before declaring them ready. If Windows
+blocks Wi-Fi access, the app opens the relevant Location settings page and checks
+again when you return. It never enables permissions or reboots Windows for you.

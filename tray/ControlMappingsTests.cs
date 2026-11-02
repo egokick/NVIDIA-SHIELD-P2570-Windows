@@ -58,11 +58,63 @@ internal static class ControlMappingsTests
         foreach (int key in new[] { 0x41, 0x30, 0x70, 0x87, 0x10, 0xA3, 0x5B, 0x60, 0x6F, 0xBA, 0xE2, 0x26 })
             Check(MappingChoices.All.Any(choice => choice.Kind == "key" && choice.Key == key), "keyboard catalog missing " + key);
 
+        // Exercise WinForms' real menu item and Closed event paths, without
+        // showing a popup or sending keyboard/mouse input to the desktop.
+        static IEnumerable<ToolStripMenuItem> MenuEntries(ToolStripItemCollection items) =>
+            items.OfType<ToolStripMenuItem>().SelectMany(item => new[] { item }.Concat(MenuEntries(item.DropDownItems)));
+        static void NotifyClosed(ContextMenuStrip menu) => typeof(ToolStripDropDown)
+            .GetMethod("OnClosed", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(menu, [new ToolStripDropDownClosedEventArgs(ToolStripDropDownCloseReason.ItemClicked)]);
+        ContextMenuStrip? currentMenu = null;
+        int menuSaves = 0, filePicks = 0, keyPicks = 0;
+        using (var row = new MappingRow("l1", "L1", (_, _) => menuSaves++,
+            filePicker: _ => { filePicks++; Check(currentMenu is { IsDisposed: false, Visible: false }, "file picker must receive a closed, live menu"); return null; },
+            keyPicker: _ => { keyPicks++; Check(currentMenu is { IsDisposed: false, Visible: false }, "key picker must receive a closed, live menu"); return 0x41; }))
+        {
+            row.SetBinding(new() { Kind = "none" });
+            _ = row.Handle;
+            currentMenu = row.ActionPicker.PrepareMenu(); _ = currentMenu.Handle;
+            NotifyClosed(currentMenu);
+            Check(!currentMenu.IsDisposed && !currentMenu.Visible, "Closed must not dispose the menu while WinForms is still handling selection");
+            MenuEntries(currentMenu.Items).Single(item => item.Text == "Space").PerformClick();
+            NotifyClosed(currentMenu);
+            Check(menuSaves == 1 && row.CurrentBinding.Key == 0x20 && !currentMenu.IsDisposed, "L1 keyboard selection must survive menu closure");
+            var previous = currentMenu;
+            currentMenu = row.ActionPicker.PrepareMenu();
+            Check(previous.IsDisposed && !currentMenu.IsDisposed, "next opening retires the old menu after click processing");
+            MenuEntries(currentMenu.Items).Single(item => item.Text == "Run script or program…").PerformClick();
+            NotifyClosed(currentMenu);
+            Check(filePicks == 1 && menuSaves == 1 && row.CurrentBinding.Key == 0x20 && !currentMenu.IsDisposed, "cancelled file picker must preserve L1 without premature menu disposal");
+            currentMenu = row.ActionPicker.PrepareMenu();
+            MenuEntries(currentMenu.Items).Single(item => item.Text == "Press a keyboard key…").PerformClick();
+            NotifyClosed(currentMenu);
+            Check(keyPicks == 1 && menuSaves == 2 && row.CurrentBinding.Key == 0x41 && !currentMenu.IsDisposed, "key picker must commit L1 after menu closure");
+        }
+        Check(currentMenu!.IsDisposed, "disposing the picker must release its final owned menu");
+
         string binary = Path.GetFullPath(AppContext.BaseDirectory), separator = Path.DirectorySeparatorChar + "debug" + Path.DirectorySeparatorChar;
         int debug = binary.IndexOf(separator, StringComparison.OrdinalIgnoreCase);
         if (debug < 0) throw new IOException("Controls UI self-tests must run from a build under debug.");
         string directory = Path.Combine(binary[..(debug + separator.Length)], "controls-ui-selftest", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
+        string dependencyReceipt = Path.Combine(directory, "dependency-result-" + Guid.NewGuid().ToString("N") + ".json");
+        var receiptWriter = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe")) {
+            UseShellExecute = false, CreateNoWindow = true, WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+            RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = directory
+        };
+        foreach (string argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "@{ok=$true;restart_required=$false} | ConvertTo-Json | Set-Content -LiteralPath '" + dependencyReceipt.Replace("'", "''") + "' -Encoding UTF8" })
+            receiptWriter.ArgumentList.Add(argument);
+        using (var writer = System.Diagnostics.Process.Start(receiptWriter) ?? throw new IOException("Could not create the PowerShell receipt fixture."))
+        {
+            var stdout = writer.StandardOutput.ReadToEndAsync(); var stderr = writer.StandardError.ReadToEndAsync();
+            if (!writer.WaitForExit(10000)) { writer.Kill(); throw new IOException("The PowerShell receipt fixture timed out."); }
+            Check(writer.ExitCode == 0 && string.IsNullOrEmpty(stderr.GetAwaiter().GetResult()), "PowerShell must produce the real dependency receipt encoding");
+            stdout.GetAwaiter().GetResult();
+        }
+        byte[] receiptBytes = File.ReadAllBytes(dependencyReceipt);
+        Check(receiptBytes.Length > 3 && receiptBytes.AsSpan(0, 3).SequenceEqual(new byte[] { 0xef, 0xbb, 0xbf }), "PowerShell 5.1 fixture must include the UTF-8 BOM");
+        using (var receipt = MainForm.ReadDependencyReceipt(dependencyReceipt))
+            Check(receipt.RootElement.GetProperty("ok").GetBoolean() && !receipt.RootElement.GetProperty("restart_required").GetBoolean(), "tray repair must accept PowerShell's successful receipt");
         using (var form = new MainForm(preview: true))
         {
             string connected = Path.Combine(directory, "connected.png");
@@ -75,6 +127,14 @@ internal static class ControlMappingsTests
             using var disconnectedReceipt = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(disconnected, ".json")));
             Check(!disconnectedReceipt.RootElement.GetProperty("controls_panel_visible").GetBoolean() && disconnectedReceipt.RootElement.GetProperty("mapping_rows").GetInt32() == 0, "disconnect must hide all controls");
             Check(form.Size == new Size(520, 650), "explicit capture viewport must remain unchanged");
+        }
+        foreach (var (scene, action) in new[] { (PreviewScene.LocationPermission, "Allow Wi-Fi access"), (PreviewScene.WifiOff, "Open Wi-Fi settings") })
+        {
+            using var form = new MainForm(preview: true);
+            string path = Path.Combine(directory, scene + ".png");
+            form.RenderPreview(scene, path, new Size(520, 650));
+            using var receipt = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(path, ".json")));
+            Check(receipt.RootElement.GetProperty("primary_action").GetString() == action && receipt.RootElement.GetProperty("primary_enabled").GetBoolean(), "missing permission and adapter need distinct actionable buttons");
         }
         return checks;
     }

@@ -3,6 +3,8 @@ param([string]$PackagePath = '')
 $ErrorActionPreference = 'Stop'
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'test-uninstall-paths.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Uninstaller path checks failed' }
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'test-dependencies.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Dependency flow checks failed' }
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not $PackagePath) { $PackagePath = Join-Path $repoRoot 'debug\package' }
 $stage = [IO.Path]::GetFullPath($PackagePath)
@@ -12,6 +14,22 @@ foreach ($required in @('package.json','bin\tray\ShieldController.exe','bin\owne
     if (-not (Test-Path -LiteralPath (Join-Path $stage $required) -PathType Leaf)) { throw "Package is missing $required" }
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Install-Dependencies.ps1'),(Join-Path $PSScriptRoot 'Uninstall.ps1') -Destination (Join-Path $stage 'bin') -Force
+# ViGEmBus is BSD-3-Clause and redistributable. Keep the original signed
+# installer unchanged. Npcap free is NOT redistributable and is never bundled.
+$driverCache = Join-Path $debugRoot 'official-driver-cache'
+$driverFiles = Join-Path $stage 'bin\drivers'
+New-Item -ItemType Directory -Force -Path $driverCache,$driverFiles | Out-Null
+$driverName = 'ViGEmBus_1.22.0_x64_x86_arm64.exe'
+$driver = Join-Path $driverCache $driverName
+$driverHash = '89220A7865076B342892F98865F3499FB7C4CFD673159E89D352C360FD014C6A'
+if (-not (Test-Path -LiteralPath $driver) -or (Get-FileHash -LiteralPath $driver -Algorithm SHA256).Hash -ne $driverHash) {
+    Invoke-WebRequest -UseBasicParsing -Uri ('https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/'+$driverName) -OutFile $driver
+}
+if ((Get-FileHash -LiteralPath $driver -Algorithm SHA256).Hash -ne $driverHash) { throw 'Official ViGEmBus download differs from the pinned release.' }
+$driverSignature = Get-AuthenticodeSignature -LiteralPath $driver
+if ($driverSignature.Status -ne 'Valid' -or -not $driverSignature.SignerCertificate.Subject.StartsWith('CN=Nefarius Software Solutions e.U.,',[StringComparison]::Ordinal)) { throw 'Official ViGEmBus signature is invalid.' }
+Copy-Item -LiteralPath $driver -Destination $driverFiles -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'licenses\ViGEmBus.txt') -Destination (Join-Path $stage 'licenses\ViGEmBus.txt') -Force
 foreach ($file in @('README.md','LICENSE','THIRD-PARTY.md')) { Copy-Item -LiteralPath (Join-Path $repoRoot $file) -Destination (Join-Path $stage $file) -Force }
 $manifestFile = Join-Path $stage 'package.json'
 $manifest = Get-Content -Raw -LiteralPath $manifestFile | ConvertFrom-Json
@@ -50,11 +68,18 @@ if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
 if ($manifest.version -notmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z') { throw 'Invalid package version.' }
 $setup = Join-Path $release ('NVIDIA-SHIELD-P2570-Windows-Setup-' + $manifest.version + '.exe')
 Copy-Item -LiteralPath (Join-Path $out 'ShieldControllerSetup.exe') -Destination $setup -Force
+$friendlySetup = Join-Path $release 'SHIELD-Controller-Setup.exe'
+Copy-Item -LiteralPath $setup -Destination $friendlySetup -Force
 $fixture = Join-Path $debugRoot ('installer-selftest\' + [guid]::NewGuid().ToString('N'))
 $checkOutput = Join-Path $debugRoot ('installer-selftest-' + [IO.Path]::GetFileName($fixture) + '.jsonl')
 $check = Start-Process -FilePath $setup -ArgumentList @('--selftest','--fixture-root',('"' + $fixture + '"')) -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $checkOutput -RedirectStandardError ($checkOutput + '.stderr')
 if ($check.ExitCode -ne 0) { Get-Content -LiteralPath ($checkOutput + '.stderr'); throw 'Installer path validation failed' }
 Get-Content -LiteralPath $checkOutput
+$flowOutput = Join-Path $debugRoot ('installer-flow-selftest-' + [IO.Path]::GetFileName($fixture) + '.jsonl')
+$flowCheck = Start-Process -FilePath $setup -ArgumentList '--flow-selftest' -WindowStyle Hidden -PassThru -Wait -RedirectStandardOutput $flowOutput -RedirectStandardError ($flowOutput + '.stderr')
+if ($flowCheck.ExitCode -ne 0) { Get-Content -LiteralPath ($flowOutput + '.stderr'); throw 'Guided installer flow checks failed' }
+Get-Content -LiteralPath $flowOutput
 $hash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
-"$hash  $([IO.Path]::GetFileName($setup))" | Set-Content -LiteralPath (Join-Path $release 'SHA256SUMS.txt') -Encoding ASCII
+if ((Get-FileHash -LiteralPath $friendlySetup -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) { throw 'Friendly download differs from the versioned installer.' }
+@("$hash  $([IO.Path]::GetFileName($setup))", "$hash  $([IO.Path]::GetFileName($friendlySetup))") | Set-Content -LiteralPath (Join-Path $release 'SHA256SUMS.txt') -Encoding ASCII
 Write-Output $setup

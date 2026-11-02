@@ -8,6 +8,12 @@ internal static partial class Program
     {
         int count = 0;
         void Check(bool value) { if (!value) throw new InvalidOperationException("Offline contract check failed."); count++; }
+        Check(WifiPermissionDenied(new UnauthorizedAccessException()));
+        Check(WifiPermissionDenied(new System.Runtime.InteropServices.COMException("Denied", unchecked((int)0x80070005))));
+        Check(!WifiPermissionDenied(new TimeoutException()) && !WifiPermissionDenied(new IOException()));
+        Check(NpcapConfigured(true, true, null) && NpcapConfigured(true, true, 0));
+        Check(!NpcapConfigured(true, true, 1) && !NpcapConfigured(true, true, "0"));
+        Check(!NpcapConfigured(false, true, null) && !NpcapConfigured(true, false, 0));
         const string valid = "{\"schema\":1,\"wifi_guid\":\"11111111-1111-1111-1111-111111111111\",\"uplink_guid\":\"22222222-2222-2222-2222-222222222222\",\"controller_mac\":[2,1,2,3,4,5],\"channel\":36,\"ssid\":\"DIRECT-TEST\",\"passphrase\":\"SyntheticOnly123\"}";
         byte[] bytes = Encoding.UTF8.GetBytes(valid); var value = Configuration.Parse(bytes);
         Check(value.Channel == 36 && value.ControllerMac.SequenceEqual(new[] { 2, 1, 2, 3, 4, 5 }));

@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/satyrnidae/shieldd",
+  "commit": "9eb7f473c9b12c1190a4250463a99b3bf6fdfc37",
+  "version": "0.4.0-alpha",
+  "license": "GPL-2.0-only",
+  "controller": "NVIDIA SHIELD P2570",
+  "adapter_usb_id": "0bda:0811",
+  "tested_build_platform": "Ubuntu 24.04 x86_64",
+  "hardware_validation": "pending"
+}

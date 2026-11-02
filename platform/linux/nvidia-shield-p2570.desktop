@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=SHIELD Controller (Linux preview)
+Comment=Pair an original NVIDIA SHIELD controller using a supported USB Wi-Fi adapter
+Exec=/usr/bin/nvidia-shield-p2570
+Icon=nvidia-shield-p2570
+Terminal=false
+Categories=Game;Utility;
+Actions=Pair;
+
+[Desktop Action Pair]
+Name=Pair a controller
+Exec=/usr/bin/nvidia-shield-p2570 --pair

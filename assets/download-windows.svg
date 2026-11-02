@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="68" viewBox="0 0 320 68" role="img" aria-labelledby="title desc">
+  <title id="title">Download for Windows</title>
+  <desc id="desc">Download the SHIELD Controller installer for Windows 11</desc>
+  <rect width="320" height="68" rx="17" fill="#AAE83F"/>
+  <g fill="none" stroke="#20352A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M34 20v20m-7-7 7 7 7-7M24 44v5h20v-5"/>
+  </g>
+  <g fill="#20352A" font-family="Segoe UI,Arial,sans-serif">
+    <text x="62" y="31" font-size="20" font-weight="600">Download for Windows</text>
+    <text x="62" y="51" font-size="12">One installer · Windows 11</text>
+  </g>
+</svg>

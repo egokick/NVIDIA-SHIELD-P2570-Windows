@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace ShieldController;
 
-internal enum PreviewScene { NotPaired, Pairing, Provisioning, PairedDisconnected, Connected, ConnectedMappingsCustom, Error, MissingDriver, Recovery, MultipleControllers, Settings, Help, NoController, Connecting, RestartRequired, InstallFailed, NetworkChoice }
+internal enum PreviewScene { NotPaired, Pairing, Provisioning, PairedDisconnected, Connected, ConnectedMappingsCustom, Error, MissingDriver, Recovery, MultipleControllers, Settings, Help, NoController, Connecting, RestartRequired, InstallFailed, NetworkChoice, LocationPermission, WifiOff }
 
 internal sealed class MainForm : Form
 {
@@ -26,6 +26,7 @@ internal sealed class MainForm : Form
     private bool connectedLayout;
     private bool calibrationPending;
     private string? calibrationMonitor;
+    private bool checkWhenActivated;
     private readonly bool preview;
     private bool busy, exiting, allowClose, automaticConnectAttempted, searchEmpty, previewRunning, restartRequired;
     private TaskCompletionSource? activeWork;
@@ -33,7 +34,7 @@ internal sealed class MainForm : Form
     private Capabilities? capabilities;
     private NextAction nextAction;
     private readonly System.Windows.Forms.Timer stateTimer = new() { Interval = 1000 };
-    private enum NextAction { None, Pair, Connect, Hide, Retry, Recover, InstallNpcap, InstallVigem, Settings }
+    private enum NextAction { None, Pair, Connect, Hide, Retry, Recover, InstallDrivers, Settings, LocationSettings, WifiSettings, InternetSettings, WindowsUpdate }
     private bool Running => owner.Running || previewRunning;
     private bool Ready => !restartRequired && capabilities is not null && capabilities.Requirements.Length > 0 && capabilities.Requirements.All(r => r.Available) && !capabilities.RecoveryRequired;
 
@@ -70,7 +71,10 @@ internal sealed class MainForm : Form
             Shown += async (_, _) => await RefreshCapabilities(autoConnect: true);
             stateTimer.Tick += (_, _) => { ApplyState(); RefreshCalibrationIfNeeded(); }; stateTimer.Start();
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged += DisplaySettingsChanged;
-            Activated += (_, _) => RefreshCalibrationIfNeeded(force: true);
+            Activated += async (_, _) => {
+                RefreshCalibrationIfNeeded(force: true);
+                if (checkWhenActivated && !busy && !Running && !owner.CommandPending) { checkWhenActivated = false; await RefreshCapabilities(autoConnect: true); }
+            };
             Load += (_, _) => {
                 Rectangle work = Screen.FromControl(this).WorkingArea;
                 Size = new Size(Math.Min(Width, work.Width), Math.Min(Height, work.Height));
@@ -287,12 +291,13 @@ internal sealed class MainForm : Form
         {
             string title = "One quick setup.";
             (string text, string action, NextAction next) = missing.Id switch {
-                "npcap" => ("One tool connects your controller.\nFollow its installer when it opens.", "Install connection tool", NextAction.InstallNpcap),
-                "vigem" => ("One driver lets games see your controller.\nFollow its installer when it opens.", "Install gamepad driver", NextAction.InstallVigem),
-                "wifi" => ("Turn on your PC's Wi-Fi, then check again.", "Check again", NextAction.Retry),
+                "architecture" => ("This release needs an Intel or AMD PC.\nWindows on ARM isn't supported yet.", "Close", NextAction.Hide),
+                "npcap" or "vigem" => ("Let's finish the tools your controller needs.\nApprove the setup prompts when asked.", "Finish setup", NextAction.InstallDrivers),
+                "location" => ("Windows needs permission to use Wi-Fi.\nTurn on Location access, then come back.", "Allow Wi-Fi access", NextAction.LocationSettings),
+                "wifi" => ("Turn on your PC's Wi-Fi.\nWe'll check again when you come back.", "Open Wi-Fi settings", NextAction.WifiSettings),
                 "pairing-radio" => ("Keep just one Wi-Fi adapter turned on.\nThen check again.", "Check again", NextAction.Retry),
-                "uplink" => ("Connect your PC to the internet.\nAn Ethernet cable works best.", "Check again", NextAction.Retry),
-                "windows" => ("This app needs Windows 11, version 24H2\nor newer, on a 64-bit PC.", "Check again", NextAction.Retry),
+                "uplink" => ("Connect your PC to the internet.\nAn Ethernet cable works best.", "Open network settings", NextAction.InternetSettings),
+                "windows" => ("This app needs Windows 11, version 24H2\nor newer, on a 64-bit PC.", "Open Windows Update", NextAction.WindowsUpdate),
                 "package" => ("Some app files are missing or changed.\nRun the app installer again.", "Check again", NextAction.Retry),
                 _ => ("Your PC needs a setup change.\nOpen Settings to see what needs attention.", "Open settings", NextAction.Settings)
             };
@@ -314,7 +319,7 @@ internal sealed class MainForm : Form
         else
             Present("Disconnected", "Your pairing is saved.\nConnect, then tap the green logo once.", "Connect", NextAction.Connect, IllustrationMode.Wake, "Your pairing is saved on this PC.");
         primary.Enabled = !locked && nextAction != NextAction.None && (!multiple || candidates.SelectedItem is Candidate);
-        if (nextAction is NextAction.InstallNpcap or NextAction.InstallVigem or NextAction.Pair or NextAction.Recover) primary.Enabled &= !Running;
+        if (nextAction is NextAction.InstallDrivers or NextAction.Pair or NextAction.Recover) primary.Enabled &= !Running;
         trayConnect.Text = disconnect.Text = Running ? "Disconnect" : "Connect";
         trayConnect.Enabled = disconnect.Enabled = !locked && (Running || model.Paired && Ready);
         trayPair.Enabled = !locked && !Running && !model.Paired && Ready;
@@ -335,8 +340,11 @@ internal sealed class MainForm : Form
             case NextAction.Hide: if (!preview) Hide(); break;
             case NextAction.Recover: await RecoverClick(); break;
             case NextAction.Retry: await RetryClick(); break;
-            case NextAction.InstallNpcap: await InstallDependency("Npcap"); break;
-            case NextAction.InstallVigem: await InstallDependency("ViGEmBus"); break;
+            case NextAction.InstallDrivers: await InstallDependency(); break;
+            case NextAction.LocationSettings: OpenWindowsSetting("ms-settings:privacy-location"); break;
+            case NextAction.WifiSettings: OpenWindowsSetting("ms-settings:network-wifi"); break;
+            case NextAction.InternetSettings: OpenWindowsSetting("ms-settings:network-status"); break;
+            case NextAction.WindowsUpdate: OpenWindowsSetting("ms-settings:windowsupdate"); break;
             case NextAction.Settings: ShowPage(settings); break;
         }
     }
@@ -369,7 +377,7 @@ internal sealed class MainForm : Form
     }
     internal static string RequirementSummary(Capabilities c) => c.Requirements.All(r => r.Available)
         ? "✓  Everything is installed and ready."
-        : "Needs setup: " + string.Join(", ", c.Requirements.Where(r => !r.Available).Select(r => r.Id switch { "windows" => "Windows version", "npcap" => "Npcap", "vigem" => "ViGEmBus", "package" => "application files", "wifi" => "Wi-Fi access", "pairing-radio" => "Wi-Fi selection", "uplink" => "internet connection", _ => "connection requirements" }));
+        : "Needs setup: " + string.Join(", ", c.Requirements.Where(r => !r.Available).Select(r => r.Id switch { "windows" => "Windows version", "npcap" => "Npcap", "vigem" => "ViGEmBus", "package" => "application files", "location" => "Windows Wi-Fi permission", "wifi" => "Wi-Fi access", "pairing-radio" => "Wi-Fi selection", "uplink" => "internet connection", _ => "connection requirements" }));
     private static void SetAdapters(ChoicePicker control, AdapterChoice[] values, string? selected)
     {
         string? previous = (control.SelectedItem as AdapterChoice)?.Guid;
@@ -419,23 +427,39 @@ internal sealed class MainForm : Form
         await Work(async () => { await owner.Recover(); recovered = true; });
         if (recovered && !exiting) await RefreshCapabilities(autoConnect: true);
     }
-    private async Task InstallDependency(string component)
+    private async Task InstallDependency()
     {
         bool installed = false; progress = "Installing";
         await Work(async () => {
             if (owner.Running) throw new InvalidOperationException("Disconnect before installing a driver.");
             string helper = Path.Combine(OwnerClient.Root, "bin", "Install-Dependencies.ps1");
             if (!File.Exists(helper)) throw new FileNotFoundException("The dependency installer is missing.");
+            string resultName = "dependency-result-" + Guid.NewGuid().ToString("N") + ".json";
+            string resultPath = Path.Combine(OwnerClient.Root, resultName);
             var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe")) {
                 UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden };
-            foreach (string arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Component", component }) start.ArgumentList.Add(arg);
+            foreach (string arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Component", "All", "-ResultFileName", resultName }) start.ArgumentList.Add(arg);
             using var process = Process.Start(start) ?? throw new IOException("The driver installer could not start.");
             await process.WaitForExitAsync();
+            if (process.ExitCode == 1618) throw new InvalidOperationException("Another setup is running. Finish it,\nthen choose Finish setup again.");
+            using var result = ReadDependencyReceipt(resultPath);
+            if (!result.RootElement.GetProperty("ok").GetBoolean()) {
+                string? message = result.RootElement.TryGetProperty("message", out var description) && description.ValueKind == JsonValueKind.String ? description.GetString() : null;
+                throw new InvalidOperationException(message is { Length: > 0 and <= 512 } ? message : "Driver setup did not finish. Try again.");
+            }
             if (process.ExitCode == 3010) { restartRequired = true; return; }
+            if (process.ExitCode == 350) throw new InvalidOperationException("Restart Windows, then open this app\nand choose Finish setup again.");
             if (process.ExitCode != 0) throw new InvalidOperationException("The driver installer did not complete.");
             installed = true;
         });
         if (installed && !exiting) await RefreshCapabilities(autoConnect: true);
+    }
+    internal static JsonDocument ReadDependencyReceipt(string path)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length > 16384) throw new InvalidDataException("Setup did not return a result.\nChoose Finish setup to try again.");
+        // Windows PowerShell 5.1 writes an UTF-8 BOM with Set-Content -Encoding
+        // UTF8. Decode the text first, as the guided installer also does.
+        return JsonDocument.Parse(File.ReadAllText(path));
     }
     private async Task ForgetClick()
     {
@@ -447,6 +471,13 @@ internal sealed class MainForm : Form
         if (forgotten && !exiting) { await RefreshCapabilities(); ShowPage(home); }
     }
     private void OpenUrl(string url) { if (!preview) Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+    private void OpenWindowsSetting(string uri)
+    {
+        if (preview) return;
+        checkWhenActivated = true;
+        try { Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true }); }
+        catch { checkWhenActivated = false; model.Fail("Windows Settings could not open. Open Settings from the Start menu, then choose Check setup."); ApplyState(); }
+    }
     private void OpenLogs() { if (!preview && Directory.Exists(owner.LogDirectory)) Process.Start(new ProcessStartInfo("explorer.exe") { UseShellExecute = true, ArgumentList = { owner.LogDirectory } }); }
     private void TestController() { if (!preview) Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "control.exe")) { UseShellExecute = true, ArgumentList = { "joy.cpl" } }); }
     internal void ShowWindow() { Show(); if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; Activate(); }
@@ -465,7 +496,7 @@ internal sealed class MainForm : Form
         bool paired = scene is PreviewScene.PairedDisconnected or PreviewScene.Connected or PreviewScene.ConnectedMappingsCustom or PreviewScene.Connecting or PreviewScene.Recovery or PreviewScene.Settings;
         ApplyCapabilities(new(paired, scene == PreviewScene.Recovery,
             [new("windows", "Windows 11 24H2 or newer", true), new("npcap", "Npcap connection tool", scene is not (PreviewScene.MissingDriver or PreviewScene.RestartRequired or PreviewScene.InstallFailed)),
-             new("vigem", "ViGEmBus gamepad driver", true), new("package", "Application files", true), new("wifi", "Wi-Fi available", true),
+             new("vigem", "ViGEmBus gamepad driver", true), new("package", "Application files", true), new("location", "Windows Wi-Fi permission", scene != PreviewScene.LocationPermission), new("wifi", "Wi-Fi available", scene != PreviewScene.WifiOff),
              new("pairing-radio", "One enabled Wi-Fi adapter", true), new("uplink", "Active internet connection", true)],
             [new("preview", "Wi-Fi")], [new("preview", "Ethernet")], "preview", "preview"));
         if (scene is PreviewScene.Pairing or PreviewScene.Provisioning) { model.BeginPairing(); busy = true; progress = scene == PreviewScene.Pairing ? "Searching" : "Pairing"; }

@@ -32,6 +32,8 @@ jobs:
       - name: Build installer
         shell: powershell
         run: ./installer/build-installer.ps1
+      - name: Verify official download and install bundled gamepad driver
+        run: ./scripts/ci-check-driver.ps1
       - name: Preserve release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

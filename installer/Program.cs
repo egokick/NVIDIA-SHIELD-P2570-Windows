@@ -36,30 +36,40 @@ internal static class Program
             try { return SelfTest(args.Length == 3 ? args[2] : null); }
             catch (Exception ex) { ReportError(ex); return 1; }
         }
+        if (args.Length == 1 && args[0] == "--flow-selftest")
+        {
+            try { Console.WriteLine(JsonSerializer.Serialize(new { passed = true, checks = SetupFlowTests.Run(), hardware_calls = 0 })); return 0; }
+            catch (Exception error) { ReportError(error); return 1; }
+        }
+        if (args.Length == 4 && args[0] == "--render-preview-state" && args[2] == "--output")
+        {
+            string path = Path.GetFullPath(args[3]);
+            if (!Enum.TryParse<SetupStage>(args[1], true, out var scene) || !Enum.IsDefined(scene) || !path.Split(Path.DirectorySeparatorChar).Contains("debug", StringComparer.OrdinalIgnoreCase) || Path.GetExtension(path) != ".png") return 2;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using var form = new SetupForm(new NativeSetupOperations(), launch: true, preview: true);
+            form.Render(path, scene); return 0;
+        }
         if (args.Any(a => a != "--silent" && a != "--no-launch")) return 2;
         bool silent = args.Contains("--silent"), launch = !args.Contains("--no-launch");
+        using var setupSession = new Semaphore(1, 1, @"Local\NVIDIA-SHIELD-P2570-GuidedSetup");
+        bool setupHeld = false;
         try
         {
-            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) || !Environment.Is64BitOperatingSystem)
-                throw new InvalidOperationException("Windows 11 version 24H2 or later (64-bit) is required.");
-            if (silent) { Install(); if (launch) Launch(); return 0; }
-            using var setupIcon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
-            using var form = new Form { Text = Product + " — Setup", ClientSize = new Size(540, 310), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, Font = new Font("Segoe UI", 10), Icon = setupIcon };
-            var title = new Label { Text = "Use your SHIELD controller wirelessly", Location = new Point(24,24), Size = new Size(492,36), Font = new Font("Segoe UI",15,FontStyle.Bold) };
-            var body = new Label { Text = "Install the tray app, then follow its pairing guide.\n\nRequires a supported Wi-Fi adapter. Npcap and ViGEmBus are checked by the app; missing drivers open their official setup prompts.\n\nInstalls for your Windows account. No subscription or account needed.", Location = new Point(24,72), Size = new Size(492,148) };
-            var start = new CheckBox { Text = "Open the app after installation", Checked = launch, Location = new Point(24,232), Size = new Size(300,28) };
-            var install = new Button { Text = "Install", Location = new Point(390,260), Size = new Size(126,34) };
-            bool installing = false;
-            form.FormClosing += (_, e) => { if (installing) e.Cancel = true; };
-            form.Controls.AddRange(new Control[] { title, body, start, install });
-            install.Click += async (_, _) =>
+            setupHeld = setupSession.WaitOne(0);
+            if (!setupHeld) throw new IOException("SHIELD Setup is already open. Finish that window before opening another installer.");
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) || System.Runtime.InteropServices.RuntimeInformation.OSArchitecture != System.Runtime.InteropServices.Architecture.X64)
+                throw new InvalidOperationException("This release needs Windows 11 version 24H2 or later on an Intel or AMD x64 PC. ARM-based Windows PCs are not supported.");
+            var operations = new NativeSetupOperations();
+            if (silent)
             {
-                installing = true; install.Enabled = false; start.Enabled = false; body.Text = "Installing…";
-                try { await Task.Run(Install); body.Text = "Installed. Pairing and connection controls are available from the tray icon."; if (start.Checked) Launch(); installing = false; form.DialogResult = DialogResult.OK; form.Close(); }
-                catch (Exception ex) { ReportError(ex); installing = false; body.Text = ex.Message; install.Enabled = true; start.Enabled = true; }
-            };
+                var result = new SetupFlow(operations).Run(progress => Console.WriteLine(JsonSerializer.Serialize(new { phase = "setup-progress", stage = progress.Stage.ToString(), percent = progress.Percent }))).GetAwaiter().GetResult();
+                Console.WriteLine(JsonSerializer.Serialize(new { phase = "setup-result", stage = result.Stage.ToString(), message = result.Message }));
+                if (result.Stage == SetupStage.Ready) { if (launch) Launch(); return 0; }
+                return result.Stage == SetupStage.Restart ? 3010 : result.Stage == SetupStage.RestartRetry ? 350 : 1;
+            }
+            using var form = new SetupForm(operations, launch);
             form.ShowDialog();
-            return form.DialogResult == DialogResult.OK ? 0 : 1;
+            return form.DialogResult == DialogResult.OK ? 0 : form.DialogResult == DialogResult.Retry ? 3010 : form.DialogResult == DialogResult.Ignore ? 350 : 1;
         }
         catch (Exception ex)
         {
@@ -67,10 +77,12 @@ internal static class Program
             if (!silent) MessageBox.Show(ex.Message, Product, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
+        finally { if (setupHeld) setupSession.Release(); }
     }
 
-    static void Launch() { Stage("launch-tray"); Process.Start(new ProcessStartInfo(Tray, "--show") { UseShellExecute = true }); }
-
+    internal static string InstallationRoot => Root;
+    internal static void ReportSetupError(Exception error) => ReportError(error);
+    internal static void Launch() { Stage("launch-tray"); Process.Start(new ProcessStartInfo(Tray, "--show") { UseShellExecute = true }); }
     // Only package payload files may be written. Configuration and pairing data
     // are deliberately outside this namespace and are never part of a release.
     internal static string Relative(string input)
@@ -90,7 +102,7 @@ internal static class Program
                 throw new IOException("The installation path contains a link. Choose a normal local Windows profile folder.");
     }
 
-    static void Install()
+    internal static void Install()
     {
         Stage("installer-lock");
         using var mutex = new Mutex(false, @"Local\NVIDIA-SHIELD-P2570-Installer");
@@ -162,7 +174,7 @@ internal static class Program
                 CreateShortcut();
                 Stage("register-uninstaller");
                 using var key = Registry.CurrentUser.CreateSubKey(RegistryPath);
-                key.SetValue("DisplayName", Product); key.SetValue("DisplayVersion", "0.2.0");
+                key.SetValue("DisplayName", Product); key.SetValue("DisplayVersion", "0.3.0");
                 key.SetValue("Publisher", "egokick and contributors"); key.SetValue("InstallLocation", Root);
                 key.SetValue("DisplayIcon", Tray); key.SetValue("URLInfoAbout", "https://github.com/egokick/NVIDIA-SHIELD-P2570-Windows");
                 string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe");
@@ -256,7 +268,7 @@ internal static class Program
             string hash = file.Value.GetString() ?? "";
             if (hash.Length != 64 || !hash.All(Uri.IsHexDigit) || !readHash(file.Name).Equals(hash,StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("A package file failed its integrity check.");
         }
-        foreach (string required in new[] { "bin/tray/ShieldController.exe", "bin/owner/ShieldControllerOwner.exe", "bin/owner/ShieldControllerOwner.dll", "bin/data-host/shield-controller-datahost.exe", "bin/pairing/wcn-pair-worker.exe", "bin/Uninstall.ps1", "bin/Install-Dependencies.ps1" })
+        foreach (string required in new[] { "bin/tray/ShieldController.exe", "bin/owner/ShieldControllerOwner.exe", "bin/owner/ShieldControllerOwner.dll", "bin/data-host/shield-controller-datahost.exe", "bin/pairing/wcn-pair-worker.exe", "bin/Uninstall.ps1", "bin/Install-Dependencies.ps1", "bin/drivers/ViGEmBus_1.22.0_x64_x86_arm64.exe", "licenses/ViGEmBus.txt" })
             if (!actual.Contains(Relative(required))) throw new InvalidDataException("A required application component is missing.");
     }
 
@@ -283,7 +295,7 @@ internal static class Program
 
     static int SelfTest(string? fixtureRoot = null)
     {
-        int checks = 0;
+        int checks = SetupFlowTests.Run();
         foreach (string value in new[] { "bin/tray/ShieldController.exe", "licenses/GPL-2.0.txt", "package.json" }) { Relative(value); checks++; }
         foreach (string value in new[] { "../secret", "/bin/a", "bin/../../outside", "bin/a:stream", "bin\\a", "config.json", "bin/a.", "bin//a", "bin/./a", "bin/CON.txt", "bin/a?.dll" })
         { bool failed=false; try { Relative(value); } catch (InvalidDataException) { failed=true; } if (!failed) return 1; checks++; }

@@ -22,5 +22,16 @@ The complete license is included as `LICENSE`.
 The maintained C# owner, launch/configuration scripts and runtime composition
 are in this directory alongside the corresponding source. Keep this notice,
 the license and corresponding modified source with any distribution of the
-controller package. The package builder does not bundle Npcap or ViGEm drivers;
-those are separately installed prerequisites.
+controller package.
+
+The Windows installer includes the unmodified, signed ViGEmBus 1.22.0 installer
+under its BSD-3-Clause licence; its notice is included in
+`installer/licenses/ViGEmBus.txt` and the installed `licenses` folder. Npcap is
+not bundled: setup downloads the official file directly and leaves its licence
+approval visible.
+
+The separate Linux preview uses the pinned native Linux shieldd implementation
+identified in `platform/linux/upstream.json`. Each Linux release includes its
+corresponding source archive and upstream notices. It has different hardware
+requirements and is not the Windows application running through a compatibility
+layer.

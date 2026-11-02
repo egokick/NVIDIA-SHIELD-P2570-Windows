@@ -6,6 +6,8 @@ using Windows.Networking.Connectivity;
 
 internal static partial class Program
 {
+    internal static bool WifiPermissionDenied(Exception error) => error is UnauthorizedAccessException || error.HResult == unchecked((int)0x80070005);
+    internal static bool NpcapConfigured(bool serviceExists, bool libraryExists, object? adminOnly) => serviceExists && libraryExists && (adminOnly is null || adminOnly is int value && value == 0);
     private static string SetupRoot => Path.Combine(Root, "setup");
     private static string SetupActive => Path.Combine(SetupRoot, "active.json");
     private static string ProvisionReceipt => Path.Combine(Root, "provision.json");
@@ -26,10 +28,16 @@ internal static partial class Program
         checkpoint = "capabilities";
         var requirements = new List<object>();
         void Requirement(string id, string label, bool available) => requirements.Add(new { id, label, available });
-        bool supported = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100);
-        Requirement("windows", "Windows 11 24H2 (build 26100) or later", supported);
-        using (var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\npcap\Parameters", false))
-            Requirement("npcap", "Npcap installed with non-administrator capture enabled", key?.GetValue("AdminOnly") is int adminOnly && adminOnly == 0 && File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "Npcap", "wpcap.dll")));
+        bool windowsSupported = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100);
+        bool architectureSupported = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.X64;
+        bool supported = windowsSupported && architectureSupported;
+        Requirement("architecture", "An Intel or AMD x64 PC is required; Windows on ARM is not supported", architectureSupported);
+        Requirement("windows", "Windows 11 24H2 (build 26100) or later", windowsSupported);
+        using (var service = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\npcap", false))
+        using (var key = service?.OpenSubKey("Parameters", false))
+            // Npcap itself treats an absent AdminOnly value as zero. Do not
+            // reject an otherwise installed driver and trap users in setup.
+            Requirement("npcap", "Npcap installed with non-administrator capture enabled", NpcapConfigured(service is not null, File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "Npcap", "wpcap.dll")), key?.GetValue("AdminOnly")));
         using (var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\ViGEmBus", false))
             Requirement("vigem", "ViGEmBus virtual Xbox controller driver", key is not null);
         bool packageOkay = false; try { package = PackageManifest.Load(); packageOkay = true; } catch { }
@@ -42,16 +50,29 @@ internal static partial class Program
             {
                 var adapters = await WiFiAdapter.FindAllAdaptersAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(8));
                 foreach (var a in adapters) { Guid id = a.NetworkAdapter.NetworkAdapterId; wifi.Add(new { guid = id, name = names.GetValueOrDefault(id, "Wi-Fi") }); }
-                Requirement("wifi", "Wi-Fi adapter available; Windows Location access may be required", wifi.Count > 0);
+                Requirement("location", "Windows allows Wi-Fi access", true);
+                Requirement("wifi", "A Wi-Fi adapter is turned on", wifi.Count > 0);
                 Requirement("pairing-radio", "One enabled Wi-Fi adapter during first pairing", wifi.Count == 1);
             }
-            catch { Requirement("wifi", "Allow Windows Location access so the application can enumerate Wi-Fi", false); }
+            catch (Exception error)
+            {
+                bool denied = WifiPermissionDenied(error);
+                Requirement("location", "Allow Location access in Windows Settings so the controller can use Wi-Fi", !denied);
+                Requirement("wifi", denied ? "Wi-Fi access is waiting for Windows permission" : "Turn on Wi-Fi and check that Windows can see the adapter", false);
+                Requirement("pairing-radio", "One enabled Wi-Fi adapter during first pairing", false);
+            }
             try
             {
                 foreach (var p in NetworkInformation.GetConnectionProfiles().Where(p => p.NetworkAdapter is not null && p.GetNetworkConnectivityLevel() == NetworkConnectivityLevel.InternetAccess).GroupBy(p => p.NetworkAdapter.NetworkAdapterId).Select(g => g.First()))
                 { Guid id = p.NetworkAdapter.NetworkAdapterId; uplinks.Add(new { guid = id, name = names.GetValueOrDefault(id, "Internet connection") }); }
             }
             catch { }
+        }
+        else
+        {
+            Requirement("location", "Wi-Fi access requires a supported Windows version and architecture", false);
+            Requirement("wifi", "A Wi-Fi adapter is turned on", false);
+            Requirement("pairing-radio", "One enabled Wi-Fi adapter during first pairing", false);
         }
         Requirement("uplink", "Active Internet connection required by the current Windows Mobile Hotspot path", uplinks.Count > 0);
         Configuration? configured = null; try { configured = Configuration.Load(PrivateFiles.Config); } catch { }
