@@ -10,6 +10,8 @@ The controller used Ozmo firmware 81. The app's guided pairing runs on Windows w
 
 ## Current boundaries
 
+**Release status:** stable Windows v0.3.0 uses 5 GHz/channel 36. The band selector and automatic selection below are development features. The test PC can create a 2.4 GHz hotspot, but the controller has not yet connected and delivered input over that path. The dual-band release remains unpublished until that test passes.
+
 - Windows 11 24H2+ APIs and x64 are required. Windows 10 and ARM64 are not release targets.
 - This release requires exactly one enabled Wi-Fi adapter. The WCN pairing provider does not expose a reliable adapter-selection constraint, so an ambiguous radio setup is rejected.
 - **Settings → Controller Wi-Fi band** offers **Automatic (prefer 5 GHz)**, **5 GHz only**, and **2.4 GHz only**. Automatic checks Windows' band support and chooses 5 GHz first. If Windows reports a radio restriction or band interference while starting 5 GHz, it retries 2.4 GHz only after verifying that no hotspot started. Explicit choices never switch bands silently. Changes apply on the next connection and preserve your pairing.
